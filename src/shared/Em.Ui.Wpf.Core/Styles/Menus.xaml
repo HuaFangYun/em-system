@@ -39,4 +39,87 @@
          <Style TargetType="Separator"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Height="1" Margin="8,5" Background="{DynamicResource outlineBrush}"/></ControlTemplate></Setter.Value></Setter></Style>
       </Style.Resources>
    </Style>
+   <Style x:Key="tabStripMenuButtonStyle" TargetType="ToggleButton" BasedOn="{StaticResource flatIconButtonStyle}">
+      <Setter Property="Width" Value="Auto"/>
+      <Setter Property="Padding" Value="12,0"/>
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}"/>
+      <Style.Triggers>
+         <Trigger Property="IsChecked" Value="True">
+            <Setter Property="Background" Value="{StaticResource flatIconButtonPressedBackground}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource flatIconButtonPressedBorder}"/>
+         </Trigger>
+      </Style.Triggers>
+   </Style>
+   <DataTemplate x:Key="menuTitleSubtitleTemplate">
+      <StackPanel Margin="0,5">
+         <TextBlock Text="{Binding Title}"/>
+         <TextBlock x:Name="subtitle" Text="{Binding Subtitle}" FontSize="11" Opacity="0.65" Margin="0,2,0,0"/>
+      </StackPanel>
+      <DataTemplate.Triggers>
+         <DataTrigger Binding="{Binding Subtitle}" Value=""><Setter TargetName="subtitle" Property="Visibility" Value="Collapsed"/></DataTrigger>
+         <DataTrigger Binding="{Binding Subtitle}" Value="{x:Null}"><Setter TargetName="subtitle" Property="Visibility" Value="Collapsed"/></DataTrigger>
+      </DataTemplate.Triggers>
+   </DataTemplate>
+   <Style x:Key="cascadePopupBorderStyle" TargetType="Border">
+      <Setter Property="Margin" Value="8,0,8,8"/>
+      <Setter Property="Padding" Value="6"/>
+      <Setter Property="CornerRadius" Value="10"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="BorderBrush" Value="{DynamicResource outlineStrongBrush}"/>
+      <Setter Property="Background" Value="{DynamicResource themePopupBackgroundBrush}"/>
+      <Setter Property="Effect"><Setter.Value><DropShadowEffect BlurRadius="16" ShadowDepth="3" Direction="270" Opacity="0.3" Color="Black"/></Setter.Value></Setter>
+   </Style>
+   <Style x:Key="cascadeMenuItemStyle" TargetType="MenuItem">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Padding" Value="10,0"/>
+      <Setter Property="MinHeight" Value="34"/>
+      <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+      <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+      <Setter Property="Template">
+         <Setter.Value>
+            <ControlTemplate TargetType="MenuItem">
+               <Grid>
+                  <Border x:Name="highlight" CornerRadius="6" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" MinHeight="{TemplateBinding MinHeight}">
+                     <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/><ColumnDefinition Width="22"/></Grid.ColumnDefinitions>
+                        <ContentPresenter x:Name="icon" ContentSource="Icon" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="check" Text="✓" Visibility="Collapsed" VerticalAlignment="Center"/>
+                        <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" HorizontalAlignment="Stretch"/>
+                        <TextBlock x:Name="arrow" Grid.Column="2" Text="›" FontSize="20" HorizontalAlignment="Right" VerticalAlignment="Center" Visibility="Collapsed"/>
+                     </Grid>
+                  </Border>
+                  <Popup x:Name="PART_Popup" Placement="Right" PlacementTarget="{Binding ElementName=highlight}" HorizontalOffset="-3" IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                     <Border Style="{StaticResource cascadePopupBorderStyle}"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" KeyboardNavigation.TabNavigation="Cycle" Grid.IsSharedSizeScope="True"/></Border>
+                  </Popup>
+               </Grid>
+               <ControlTemplate.Triggers>
+                  <Trigger Property="Role" Value="TopLevelHeader"><Setter TargetName="arrow" Property="Visibility" Value="Visible"/></Trigger>
+                  <Trigger Property="Role" Value="SubmenuHeader"><Setter TargetName="arrow" Property="Visibility" Value="Visible"/></Trigger>
+                  <Trigger Property="IsChecked" Value="True"><Setter TargetName="check" Property="Visibility" Value="Visible"/><Setter TargetName="icon" Property="Visibility" Value="Collapsed"/></Trigger>
+                  <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="highlight" Property="Background" Value="{DynamicResource stateHoverBrush}"/></Trigger>
+                  <Trigger Property="IsSubmenuOpen" Value="True"><Setter TargetName="highlight" Property="Background" Value="{DynamicResource statePressedBrush}"/></Trigger>
+                  <Trigger Property="IsEnabled" Value="False"><Setter TargetName="highlight" Property="Opacity" Value="0.4"/></Trigger>
+               </ControlTemplate.Triggers>
+            </ControlTemplate>
+         </Setter.Value>
+      </Setter>
+      <Setter Property="ItemContainerStyle" Value="{DynamicResource cascadeMenuItemStyle}"/>
+   </Style>
+   <Style x:Key="cascadeContextMenuStyle" TargetType="ContextMenu">
+      <Setter Property="OverridesDefaultStyle" Value="True"/>
+      <Setter Property="Placement" Value="Bottom"/>
+      <Setter Property="HorizontalOffset" Value="-8"/>
+      <Setter Property="VerticalOffset" Value="2"/>
+      <Setter Property="HasDropShadow" Value="False"/>
+      <Setter Property="MinWidth" Value="240"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}"/>
+      <Setter Property="ItemContainerStyle" Value="{StaticResource cascadeMenuItemStyle}"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ContextMenu"><Border Style="{StaticResource cascadePopupBorderStyle}"><ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" KeyboardNavigation.TabNavigation="Cycle" Grid.IsSharedSizeScope="True"/></Border></ControlTemplate></Setter.Value></Setter>
+      <Style.Resources>
+         <Style TargetType="Separator"><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Separator"><Border Height="1" Margin="8,5" Background="{DynamicResource outlineBrush}"/></ControlTemplate></Setter.Value></Setter></Style>
+      </Style.Resources>
+   </Style>
 </ResourceDictionary>
