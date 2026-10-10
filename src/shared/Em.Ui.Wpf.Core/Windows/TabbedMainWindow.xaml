@@ -548,10 +548,12 @@
                                 <Setter.Value>
                                     <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}"
                                                  Style="{StaticResource tabContextMenuStyle}">
+                                        <!-- Reload follows the navigation's IsReloadVisible switch, like the SPA toolbar. -->
                                         <MenuItem Header="Reload"
+                                                  Visibility="{Binding Entry.Navigation.IsReloadVisible, Converter={StaticResource boolToVisibility}}"
                                                   Command="{Binding PlacementTarget.Tag.Commands[ReloadTabCommand], RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                   CommandParameter="{Binding}" />
-                                        <Separator />
+                                        <Separator Visibility="{Binding Entry.Navigation.IsReloadVisible, Converter={StaticResource boolToVisibility}}" />
                                         <MenuItem Header="Close"
                                                   Command="{Binding PlacementTarget.Tag.Commands[CloseTabCommand], RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                   CommandParameter="{Binding}" />
@@ -634,6 +636,11 @@
                                             <Trigger Property="IsEnabled" Value="False">
                                                 <Setter Property="Opacity" Value="0.4" />
                                             </Trigger>
+                                            <!-- Declared after the hover/selected triggers so it wins: a navigation that turns
+                                                 IsReloadVisible off has no reload button on its tab, and takes no space for it. -->
+                                            <DataTrigger Binding="{Binding Entry.Navigation.IsReloadVisible}" Value="False">
+                                                <Setter TargetName="reloadButton" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Setter.Value>
