@@ -1,5 +1,14 @@
 # CLAUDE.md
 
+## Control tab strip bersama (2026-10-10)
+
+`EmTabStrip` di `Em.Ui.Wpf.Controls` tersedia untuk tab panel dalam satu layar: close/middle-click, reorder,
+binding `TitlePath`, dan `LeadingContent` opsional tanpa ruang bila null. `TabbedMainWindow` tetap memakai
+control/behavior host yang ada. Menu menggunakan `tabStripMenuButtonStyle`, `cascadeContextMenuStyle`,
+`cascadeMenuItemStyle` dan `menuTitleSubtitleTemplate` dari `MaterialDesign.xaml`; terapkan style item juga
+pada submenu. Panduan: `doc/engine/engine-tab-strip.md`. Harness di
+`..\.artefacts\em-system\scripts\tabstrip-render\`; output di `out`, tanpa berkas uji di repo.
+
 ## Push hanya atas permintaan eksplisit pengguna
 
 Keputusan pengguna 2026-10-07; berlaku untuk Codex dan Claude Code, juga repo
