@@ -12,6 +12,9 @@ namespace Em.Ui.Wpf.Core.Tests
       [WpfTheory]
       [InlineData("surfaceListBoxStyle")]
       [InlineData("surfaceTreeViewStyle")]
+      [InlineData("tabStripMenuButtonStyle")]
+      [InlineData("cascadeContextMenuStyle")]
+      [InlineData("cascadeMenuItemStyle")]
       public void MaterialDesign_ContainsSharedStyle(string key) {
          // Application's static constructor registers the pack:// handler that ResourceDictionary.Source reads
          // through; running it is enough, an Application instance (one per process) is not needed.
@@ -19,6 +22,13 @@ namespace Em.Ui.Wpf.Core.Tests
          var resources = new ResourceDictionary { Source = new Uri(MaterialDesignUri, UriKind.Absolute) };
 
          Assert.IsType<Style>(resources[key]);
+      }
+
+      [WpfFact]
+      public void MaterialDesign_ContainsTitleSubtitleTemplate() {
+         RuntimeHelpers.RunClassConstructor(typeof(Application).TypeHandle);
+         var resources = new ResourceDictionary { Source = new Uri(MaterialDesignUri, UriKind.Absolute) };
+         Assert.IsType<DataTemplate>(resources["menuTitleSubtitleTemplate"]);
       }
    }
 }

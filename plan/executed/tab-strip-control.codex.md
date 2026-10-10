@@ -1,7 +1,7 @@
 # Plan: Control tab strip bersama (`EmTabStrip`) dan style menu bertingkat
 
 - **Tanggal:** 2026-10-10
-- **Status:** belum dieksekusi — menunggu persetujuan eksekusi pengguna
+- **Status:** dieksekusi 2026-10-10 — lihat tab-strip-control-report.md
 - **Agent:** Codex (Claude Code boleh memakai file yang sama)
 - **Repo:** hanya em-system. Konsumen pertama adalah layar konsol analytics di repo turunan privat; plan
   konsumennya ada di repo itu dan menautkan ke plan ini. Plan ini **tidak** menyebut nama produk, modul bisnis,
@@ -150,3 +150,4 @@ Berkas: `src/shared/Em.Ui.Wpf.Core/Styles/Menus.xaml` (sudah di-merge `MaterialD
 
 - `EmTabStrip` dan ketiga style tersedia publik, ter-build, test lulus, PNG terang/gelap diperiksa.
 - Guide tertaut dari README engine; plan dan laporan di `plan/executed/`; commit di `work-bench` tanpa push.
+

@@ -1,7 +1,7 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:controls="clr-namespace:Em.Ui.Wpf.Controls"
-                    xmlns:fa="http://schemas.fontawesome.com/icons/"
+                    xmlns:fa="http://schemas.fontawesome.com/icons/fonts"
                     xmlns:windows="clr-namespace:Em.Ui.Wpf.Windows">
 
    <!--
@@ -629,4 +629,7 @@
                                 </Setter.Value>
                             </Setter>
                         </Style>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 </ResourceDictionary>
