@@ -207,7 +207,8 @@ copy yang hilang sebagai missing, dan menggantinya. Copy yang terputus saat ditu
 Navigasi `admin.objectstorage` (Administrative Tools, claim `Object Storage Manager Access`), didaftarkan oleh
 core seperti manager lainnya. MAUI tidak punya layar ini.
 
-- **Buckets**: tabel bucket (policy, object, ukuran logis, kuota, akses). Double-click atau **Browse** membuka
+- **Buckets**: tabel bucket (policy, object, ukuran logis, kuota, akses). Double-click membuka bucket di bucket
+  editor pada tab baru (lihat di bawah). **Browse** membuka
   object browser: path breadcrumb, pseudo-folder dari `/`, upload (toolbar atau drag-drop file), download,
   delete, side sheet **Versions** (restore, download sebuah version, hapus permanen sebuah version), dan
   **Load more** untuk listing panjang. **New bucket**/**Edit** membuka side sheet (nama, policy, state, note).

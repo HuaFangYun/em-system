@@ -47,8 +47,9 @@ public partial class ObjectStorageManager : UserControl, INavigationBody
       args.Handled = true;
       switch (item.DataContext) {
          case StoreBucketInfo bucket:
+            // A bucket opens in its own bucket editor tab; the in-place browser stays behind Browse.
             Vm.SelectedBucket = bucket;
-            _ = Vm.OpenBucketCommand();
+            _ = Vm.NavigationEntry is null ? Vm.OpenBucketCommand() : Vm.OpenBucketPageCommand();
             break;
          case StoreBrowserItem entry:
             Vm.SelectedItem = entry;

@@ -203,7 +203,8 @@ copies missing and replaces them. Copies interrupted while writing are treated a
 Navigation `admin.objectstorage` (Administrative Tools, claim `Object Storage Manager Access`), registered by
 the core like the other managers. MAUI has no screen.
 
-- **Buckets**: bucket table (policy, objects, logical size, quota, access). Double-click or **Browse** opens
+- **Buckets**: bucket table (policy, objects, logical size, quota, access). Double-click opens the bucket in the
+  bucket editor on a new tab (see below). **Browse** opens
   the object browser: breadcrumb path, pseudo-folders from `/`, upload (toolbar or drag-drop of files),
   download, delete, **Versions** side sheet (restore, download a version, delete a version permanently),
   **Load more** for long listings. **New bucket**/**Edit** open a side sheet (name, policy, state, note).
