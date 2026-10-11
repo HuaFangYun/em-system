@@ -21,6 +21,16 @@ biarkan pengguna melakukan push; jangan mencoba atau mengulang push tanpa
 permintaan eksplisit. Aturan ini mengesampingkan asumsi izin push dari alur
 kerja atau plan sebelumnya.
 
+Pengecualian sesi Claude Code web (keputusan pengguna 2026-10-11): pada sesi
+Claude Code di cloud (claude.ai/code, container sementara), agent **otomatis
+commit dan push** setelah pekerjaan selesai, tanpa menunggu permintaan push
+terpisah, karena isi container hilang saat sesi berakhir. Push hanya ke branch
+kerja yang ditetapkan untuk sesi itu; jangan push ke `main` atau branch lain,
+jangan force-push, dan jangan membuat tag. Bila push ditolak (mis. 403 akses
+GitHub), laporkan penyebabnya kepada pengguna dan jangan mencoba melewatinya.
+Sesi lokal (Claude Code di mesin pengguna) dan Codex tetap mengikuti aturan di
+atas.
+
 ## Commit hanya pada branch work-bench (keputusan pengguna 2026-10-11)
 
 Sebelum commit di `em-system`, periksa branch aktif. Jika branch aktif **bukan `work-bench`**,
@@ -269,3 +279,5 @@ Pembaruan 2026-10-09 (history test SMTP): From/To berupa ComboBox editable, hist
 Pembaruan 2026-10-09 (display nama SMTP): ComboBox test SMTP memakai ItemTemplate Name eksplisit agar selection/dropdown tidak menampilkan nama class. Rule list/item/value/display ditambahkan di atas. Build WPF dan 11 uji SMTP console lulus, termasuk verifikasi binding teks dari objek nyata tanpa render. GUI belum diuji; laporan `plan/executed/smtp-combo-profile-name.codex.md`.
 
 Verifikasi pengguna 2026-10-09: perbaikan display nama profil SMTP sudah dites langsung oleh pengguna dan berhasil. Verifikasi GUI fitur lain tetap mengikuti catatan pengujian masing-masing.
+
+Pembaruan 2026-10-11 (object storage, eksekusi plan `plan/executed/object-storage.md`): engine object storage dibangun di `Em.Api.Core/Api/ObjectStorage/` (`IObjectStore`/`ObjectStore` sebagai satu-satunya jalur logika versi/policy/kuota, volume `LocalFolderVolumeProvider`, `ObjectStorageMaintenance` untuk replikasi/repair, retensi, GC, `ObjectStorageBackground` untuk cek skema, lease `ObjectStore.Lease` di `ta_Meta` dan pembersihan staging, `ObjectStorageServices` dengan claim `Object Storage Manager Access`/`Object Storage Settings Manage`, endpoint publik `GET/HEAD /store/<bucket>/<key>` untuk bucket PublicRead, adapter opsional `ObjectStoreBinaryStorage`), kontrak `IObjectStorageServices` + entity `ta_Store*` di `Em.Libs`, layar **Object Storage Manager** (`admin.objectstorage`, tab Buckets/Volumes/Policies/Maintenance dengan `EmTabStrip`, card home) di `Em.Ui.Wpf.Core`; MAUI tanpa layar. Host menyalakan lewat `builder.AddObjectStorage()`; host contoh `Em.Api` menyalakannya secara bawaan dan bisa dimatikan dengan `"modules": { "objectStorage": false }`/`EM_MODULE_OBJECTSTORAGE=false`. Database wajib menjalankan `doc/sqlscript/mssql/tables/060-objectstore.sql` (setelah `050-smtp.sql` dalam urutan `tables/`) lalu `views/vi_StoreBucket.sql`, `vi_StoreObject.sql`, `vi_StoreVolume.sql`; startup menolak jalan tanpa skema. Hanya SQL Server, satu instance API per database/volume. Status uji (sesi Claude Code web, Linux tanpa SQL Server): build backend/WPF lulus, 54 unit test object storage (total 142 di `Em.Api.Core.Tests`) lulus, translasi query EF ke SQL diperiksa lewat `ToQueryString`; 13 test integrasi SQL Server (`ObjectStoreTests`) dan 6 test view model/XAML WPF (`ObjectStorageManagerTests`) sudah ditulis dan terkompilasi tetapi **belum dijalankan** (tidak ada SQL Server/Windows di container; unduhan SQL Server diblokir proxy). Skrip SQL, layar WPF (render/interaksi), endpoint `/store` dan HTTP live belum diuji. Panduan: [doc/engine/engine-object-storage.md](doc/engine/engine-object-storage.md).

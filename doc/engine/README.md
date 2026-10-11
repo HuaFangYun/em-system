@@ -13,6 +13,7 @@ solutions, tests and NuGet packaging are covered in [Build and packaging](build.
 | [CDN](engine-cdn-storage.md) | Public `/cdn` downloads, CDN Manager actions, storage size |
 | [Container registry](engine-registry.md) | OCI `/v2` registry, roots and containers, Container Manager, Docker testing |
 | [NuGet server (NuPak)](engine-nupak.md) | NuGet V3 feeds, prefixes, recycle bin, NuGet Manager |
+| [Object storage](engine-object-storage.md) | Buckets, versions, deduplicated blobs on volumes, policies, `IObjectStore`, `/store`, Object Storage Manager |
 | [NuPak multi-feed upgrade](engine-nupak-multifeed-upgrade.md) | Runbook for older single-feed installations |
 | [Storage settings](engine-storage-settings.md) | Managing CDN, registry and NuGet stores from the UI |
 | [SMTP](engine-smtp.md) | Named SMTP profiles, default email service, compatibility and tabular SMTP Manager |

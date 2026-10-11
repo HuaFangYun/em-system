@@ -1,8 +1,9 @@
 # Object storage Em
 
 - **Tanggal:** 2026-10-09
-- **Status:** diskusi
-- **Plan turunan:** belum ada
+- **Status:** jadi plan (2026-10-11; sebelumnya diskusi) — plan sudah dieksekusi 2026-10-11
+- **Plan turunan:** [plan/executed/object-storage.md](../../plan/executed/object-storage.md)
+- **Guide:** [doc/engine/engine-object-storage.md](../engine/engine-object-storage.md)
 
 Catatan ini merekam rancangan ERD yang dilampirkan pengguna dan penjelasan
 awal. Ini bukan perintah implementasi. Nama tabel/kolom di bagian rekonstruksi
@@ -225,3 +226,16 @@ dan adapter S3 kelak, bukan kewajiban mengimplementasikan kedua API sekaligus.
 
 Catatan dan telaah S3 sebelumnya tetap disimpan sebagai pertimbangan untuk
 tahap mendatang. Status tetap **diskusi**, tanpa plan atau implementasi baru.
+
+## Pembaruan 2026-10-11 — keputusan dan promosi ke plan
+
+Pengguna meminta plan pembangunan object storage dan menjawab pertanyaan pemblokir:
+
+1. Cakupan policy: placement + replika, retensi versi, kuota bucket, dan hak akses (keempatnya).
+2. Volume v1: folder lokal/NAS di server API; provider remote menyusul lewat adapter.
+5. Deduplikasi: global lintas bucket.
+7. Deployment: satu instance API per storage. Konsumen pertama adalah konsumen baru; CDN, registry,
+   NuPak, dan approval tidak dimigrasikan. Adapter `IBinaryStorage` opsional.
+
+Pertanyaan 4 (semantik key/versi/delete/retensi) dan 6 (replika minimum) dijawab dengan usulan bawaan
+di bagian 2 plan; usulan itu dapat diubah pengguna sebelum eksekusi. Status menjadi **jadi plan**.

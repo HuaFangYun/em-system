@@ -71,6 +71,11 @@ namespace Em.Ui.Wpf.Navigations
                var size = await service.GetMeta_NuPakStorageSize();
                tile.StorageCaption = $"NuGet storage: {CdnManagerVm.FormatSize(size.TotalBytes)} · {size.Packages:N0} packages";
             }
+            else if (tile.Navigation?.Name == "admin.objectstorage") {
+               var status = await _app.ServiceProvider.GetRequiredService<IObjectStorageServices>().GetMeta_StoreStatus();
+               var problems = status.VolumesWithProblems > 0 ? $" · {status.VolumesWithProblems:N0} volume problem(s)" : "";
+               tile.StorageCaption = $"Objects: {CdnManagerVm.FormatSize(status.LogicalBytes)} logical · {CdnManagerVm.FormatSize(status.PhysicalBytes)} physical" + problems;
+            }
             else {
                var service = _app.ServiceProvider.GetRequiredService<ICtnServices>();
                var status = await service.GetMeta_CtnStatus();
@@ -141,7 +146,7 @@ namespace Em.Ui.Wpf.Navigations
             Icon = nav.NavigationIcon,
             NavigateCommand = new UiCommandAsync($"{nav.Name}.navigate", _ => _app.NavigateTo(nav), _ => true)
          };
-         if (nav.Name is "admin.container" or "admin.cdn" or "admin.nupak") {
+         if (nav.Name is "admin.container" or "admin.cdn" or "admin.nupak" or "admin.objectstorage") {
             tile.RefreshCardCommand = new UiCommandAsync($"{nav.Name}.refreshCard",
                _ => LoadCardStorageAsync(tile), _ => !tile.IsStorageRefreshing);
          }
@@ -433,6 +438,7 @@ namespace Em.Ui.Wpf.Navigations
       public string? StorageDescription => Navigation?.Name switch {
          "admin.cdn" => "Total public file sizes across all CDN folders. Excludes internal/temporary, hidden/system files, symlinks and filesystem overhead.",
          "admin.nupak" => "Stored packages including recycled versions; excludes database/filesystem overhead.",
+         "admin.objectstorage" => "Logical bytes of every kept object version (what quotas count) versus physical bytes of every blob copy on all volumes after deduplication and replication.",
          "admin.container" => "Stored unique blobs plus manifests, including retained blobs. Excludes temporary uploads and database/filesystem overhead. Based on registry metadata.",
          _ => null
       };

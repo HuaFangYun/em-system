@@ -12,6 +12,10 @@ var app = EmApp.BuildApp(args, builder => {
    builder.AddManagedStorageSettings();
    builder.AddNuPak();
    builder.AddSmtp();
+   // Needs tables/060-objectstore.sql; turn off with "modules": { "objectStorage": false } or EM_MODULE_OBJECTSTORAGE=false.
+   if (config.IsModuleEnabled("objectStorage", true)) {
+      builder.AddObjectStorage();
+   }
 
    builder.AddLocalBinaryStorage(config.Storage.BinaryPath);
    if (config.IsModuleEnabled("test")) {

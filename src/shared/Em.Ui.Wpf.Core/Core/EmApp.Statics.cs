@@ -85,6 +85,7 @@ namespace Em.Ui.Wpf.Core
          app.Services.AddSingleton<ICdnServices, CdnService>();
          app.Services.AddSingleton<ICtnServices, CtnService>();
          app.Services.AddSingleton<INuPakServices, NuPakService>();
+         app.Services.AddSingleton<IObjectStorageServices, ObjectStorageService>();
          app.Services.AddSingleton<IRobotServices, RobotService>();
          app.Services.AddSingleton<ISmtpService>(provider => new Em.Ui.Core.SmtpClientService(app, app.GetActiveApiClient));
          app.Services.AddSingleton<ISmtpProfileService>(provider => new Em.Ui.Core.SmtpProfileClientService(app, app.GetActiveApiClient));
@@ -406,6 +407,13 @@ namespace Em.Ui.Wpf.Core
             RequireParameter=false, IsMenuVisible=false,
             NavigationIcon=EFontAwesomeIcon.Solid_Box.CreateImageSource(System.Windows.Media.Brushes.Gray)
          }, "Administrative Tools:" + INuPakServices.ManagerClaim));
+         app.AddNavigation(RequireClaim(new Navigation {
+            Name = "admin.objectstorage", Title = "Object Storage Manager", Subtitle = "Buckets, volumes and policies", OrderIndex = -1,
+            Description = "Browse buckets and object versions, manage volumes and storage policies, and run garbage collection, retention and repair.",
+            BodyType = BodyType.Of<ObjectStorageManager>(), Kind = NavigationKind.Manager, EmApp = app,
+            RequireParameter = false, IsMenuVisible = false,
+            NavigationIcon = EFontAwesomeIcon.Solid_Database.CreateImageSource(System.Windows.Media.Brushes.Gray)
+         }, "Administrative Tools:" + IObjectStorageServices.ManagerClaim));
       }
 
       /// <summary>

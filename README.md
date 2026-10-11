@@ -65,7 +65,10 @@ dotnet test src/frontend/Em.Ui.Wpf.slnx
 The configuration file lives outside the repository, is copied to the build output, and is not included
 in `dotnet publish`. The environment variables `EM_DB_CONNECTION_STRING`, `EM_DB_PROVIDER`,
 `EM_ADMIN_INITIAL_PASSWORD` and `EM_DEBUG_TOKEN` override the file, and `EM_API_CONFIG` can point to a file
-elsewhere. The sample test module is off unless `"modules": { "test": true }` or `EM_MODULE_TEST=true` is set. In deployments, supply secrets through the server's secret manager.
+elsewhere. The sample test module is off unless `"modules": { "test": true }` or `EM_MODULE_TEST=true` is set.
+Object storage is on and needs `tables/060-objectstore.sql` with its views; turn it off with
+`"modules": { "objectStorage": false }` or `EM_MODULE_OBJECTSTORAGE=false`. In deployments, supply secrets
+through the server's secret manager.
 
 More details, including the container image and Docker Compose: [src/backend/README.md](src/backend/README.md).
 
@@ -128,8 +131,8 @@ The scripts need `pwsh` (PowerShell 7+) on the `PATH`.
 
 ## Documentation
 
-- [Engine guides](doc/engine/README.md): approval, CDN, container registry, NuGet server, storage settings,
-  robots, publishing, Release Manager, login branding, and the test module.
+- [Engine guides](doc/engine/README.md): approval, CDN, container registry, NuGet server, object storage,
+  storage settings, robots, publishing, Release Manager, login branding, and the test module.
 - Conventions: [Dahlia Convention: database and C# model naming](doc/convention/dahlia-convention.md),
   [container image naming](doc/convention/container-naming.md),
   [NuGet package naming](doc/convention/nuget-naming.md).
