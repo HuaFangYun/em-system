@@ -90,12 +90,12 @@ public sealed class ObjectStorageMaintenance(ObjectStore store, ILogger<ObjectSt
          if (blob is null || blob.cStoreObjectBlobState != (int)StoreBlobState.Ready) return default;
 
          // Candidate volumes: the volumes of every policy that refers to the blob, in policy order.
-         var policies = await (from v in Db.Versions
-                               join o in Db.Objects on v.cStoreObjectId equals o.cStoreObjectId
-                               join k in Db.Buckets on o.cStoreBucketId equals k.cStoreBucketId
-                               join p in Db.Policies on k.cStorePolicyId equals p.cStorePolicyId
-                               where v.cStoreObjectBlobHash == hash
-                               select p).Distinct().ToListAsync(ct);
+         var policyIds = await (from v in Db.Versions
+                                join o in Db.Objects on v.cStoreObjectId equals o.cStoreObjectId
+                                join k in Db.Buckets on o.cStoreBucketId equals k.cStoreBucketId
+                                where v.cStoreObjectBlobHash == hash
+                                select k.cStorePolicyId).Distinct().ToListAsync(ct);
+         var policies = await Db.Policies.Where(p => policyIds.Contains(p.cStorePolicyId)).ToListAsync(ct);
          if (policies.Count == 0) return default;
          var target = policies.Max(p => p.cStorePolicyReplicaTarget);
          var candidates = new List<ta_StoreVolume>();
@@ -233,12 +233,11 @@ public sealed class ObjectStorageMaintenance(ObjectStore store, ILogger<ObjectSt
                   var versions = await Db.Versions.Where(v => v.cStoreObjectId == obj.cStoreObjectId)
                      .OrderByDescending(v => v.cStoreObjectVersionId)
                      .Select(v => new { v.cStoreObjectVersionId, v.cStoreObjectVersionMarker, v.datestamp }).ToListAsync(ct);
-                  var history = versions.Where(v => v.cStoreObjectVersionId != obj.cStoreObjectVersionCurrent).ToList();
-                  var expired = history.Where((v, i) => (bucket.cStorePolicyKeepVersions is { } keep && i >= keep) ||
-                                                        (cutoff is { } c && v.datestamp < c)).ToList();
+                  var expired = ExpiredVersions(versions.Select(v => (v.cStoreObjectVersionId, v.datestamp)), obj.cStoreObjectVersionCurrent,
+                     bucket.cStorePolicyKeepVersions, cutoff);
                   foreach (var version in expired)
-                     if (await store.PurgeVersionCoreAsync(bucket.cStoreBucketId, obj.cStoreObjectId, version.cStoreObjectVersionId, ct)) purged++;
-                  var left = versions.Count - expired.Count;
+                     if (await store.PurgeVersionCoreAsync(bucket.cStoreBucketId, obj.cStoreObjectId, version, ct)) purged++;
+                  var left = versions.Count - expired.Length;
                   var current = versions.FirstOrDefault(v => v.cStoreObjectVersionId == obj.cStoreObjectVersionCurrent);
                   if (left == 1 && current is { cStoreObjectVersionMarker: true } &&
                       await store.PurgeVersionCoreAsync(bucket.cStoreBucketId, obj.cStoreObjectId, current.cStoreObjectVersionId, ct)) {
@@ -254,6 +253,19 @@ public sealed class ObjectStorageMaintenance(ObjectStore store, ILogger<ObjectSt
       }
       finally { Runtime.RetentionGate.Release(); }
    }
+
+   /// <summary>
+   /// Versions retention purges: among the non-current versions (newest first), those beyond
+   /// <paramref name="keepVersions"/> or created before <paramref name="cutoff"/>. The current version is never purged.
+   /// </summary>
+   /// <param name="versions">Every version of an object as (number, creation time).</param>
+   /// <param name="current">Current version number.</param>
+   /// <param name="keepVersions">Non-current versions to keep; <c>null</c> keeps all.</param>
+   /// <param name="cutoff">Oldest creation time to keep; <c>null</c> keeps all ages.</param>
+   internal static int[] ExpiredVersions(IEnumerable<(int Version, DateTime Created)> versions, int? current, int? keepVersions, DateTime? cutoff) =>
+      versions.Where(v => v.Version != current).OrderByDescending(v => v.Version)
+         .Where((v, i) => (keepVersions is { } keep && i >= keep) || (cutoff is { } c && v.Created < c))
+         .Select(v => v.Version).ToArray();
 
    #endregion
 
@@ -304,7 +316,6 @@ public sealed class ObjectStorageMaintenance(ObjectStore store, ILogger<ObjectSt
          var cutoff = now.AddHours(-graceHours);
          var candidates = await Db.Blobs.Where(b => b.cStoreObjectBlobState == (int)StoreBlobState.Orphan && b.cStoreObjectBlobOrphanAt < cutoff)
             .Select(b => b.cStoreObjectBlobHash).ToListAsync(ct);
-         var volumes = await Db.Volumes.ToDictionaryAsync(v => v.cStoreVolumeId, ct);
          int deleted = 0, skipped = 0, done = 0;
          long bytes = 0;
          foreach (var hash in candidates) {
@@ -315,6 +326,7 @@ public sealed class ObjectStorageMaintenance(ObjectStore store, ILogger<ObjectSt
                   if (blob is null || blob.cStoreObjectBlobState != (int)StoreBlobState.Orphan || blob.cStoreObjectBlobOrphanAt >= cutoff ||
                       await Db.Versions.AnyAsync(v => v.cStoreObjectBlobHash == hash, ct)) continue;
                   var copies = await Db.Copies.AsTracking().Where(c => c.cStoreObjectBlobHash == hash).ToListAsync(ct);
+                  var volumes = await Db.Volumes.ToDictionaryAsync(v => v.cStoreVolumeId, ct);
                   if (copies.Any(c => volumes[c.cStoreVolumeId].cStoreVolumeState == (int)StoreVolumeState.Offline)) { skipped++; continue; }
                   foreach (var copy in copies) copy.cStoreObjectBlobVolState = (int)StoreBlobCopyState.Deleting;
                   await Db.SaveChangesAsync(ct);

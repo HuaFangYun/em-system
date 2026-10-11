@@ -1,6 +1,6 @@
 # Plan — Object storage engine (tahap internal Em)
 
-Status: **belum dieksekusi — plan matang, menunggu permintaan eksekusi**
+Status: **dieksekusi 2026-10-11** (Claude Code web) — lihat §13 Laporan eksekusi
 Dibuat: 2026-10-11 — dipromosikan dari [doc/ideas/object-storage.md](../../doc/ideas/object-storage.md)
 setelah pengguna menjawab pertanyaan pemblokir (lihat §1).
 
@@ -274,3 +274,70 @@ Usulan lanjutan yang muncul saat eksekusi dicatat di `doc/ideas/`.
 - **Listing key panjang**: index pada `nvarchar(1024)` terbatas; ukur query listing dengan data besar.
 - **Counter kuota**: harus selalu diperbarui di transaksi yang sama. Integration test membandingkan counter
   dengan `SUM` riwayat versi.
+
+## 13. Laporan eksekusi (2026-10-11)
+
+Dieksekusi di sesi Claude Code web (container Linux, .NET SDK 10.0.112 dari apt Ubuntu). Usulan bawaan §2
+dipakai tanpa perubahan.
+
+### Yang dibangun
+
+| Fase | Hasil |
+| --- | --- |
+| 1. SQL | `doc/sqlscript/mssql/tables/060-objectstore.sql` (8 tabel, CHECK constraint, kolom terhitung `cStoreObjectKeyPrefix` + index untuk listing, baris `ObjectStoreSchemaVersion=1` di `ta_Meta`), `views/vi_StoreBucket.sql`, `vi_StoreObject.sql`, `vi_StoreVolume.sql` |
+| 2. Kontrak | `Em.Libs/Api.Core.Models/IObjectStorageServices.cs` (action, DTO, konstanta claim), `ObjectStorageEntities.cs` (entity `ta_Store*`, enum State/Type/Access) |
+| 3. Core | `Em.Api.Core/Api/ObjectStorage/`: `ObjectStorageDbContext`, `IObjectStore`/`ObjectStore`, `StoreNames` (validasi bucket/key/MIME/metadata, token continuation), `StoreCrc32`, `StoreHashLock`, `ObjectStorageRuntime`, `Volumes/IStoreVolumeProvider` + `LocalFolderVolumeProvider` |
+| 4. Background | `ObjectStorageMaintenance` (replikasi/repair, retensi, review/run GC, staging cleanup), `ObjectStorageBackground` (cek skema, lease `ObjectStore.Lease`, replikasi saat diberi sinyal dan tiap jam, retensi tiap 6 jam) |
+| 5. Action/endpoint | `ObjectStorageServices` (partial: umum+maintenance, Settings = volume/policy/bucket, Objects), `ObjectStorageEndpoint` (`/store`), `EmAppBuilder.ObjectStorage.cs` (`AddObjectStorage()`), host `Em.Api` menyalakannya (saklar `modules.objectStorage`) |
+| 6. WPF | Proxy `ObjectStorageService`, navigasi `admin.objectstorage` + entri Tools, layar `ObjectStorageManager` (tab Buckets/Volumes/Policies/Maintenance, browser object dengan breadcrumb, drag-drop upload, side sheet versi/editor), card home |
+| 7. Opsional | `ObjectStoreBinaryStorage : IBinaryStorage` (tidak didaftarkan otomatis, tidak mengganti binary storage approval) |
+| 8. Verifikasi & dokumen | Unit test, test integrasi, test view model; `doc/engine/engine-object-storage.md`, tautan di `doc/engine/README.md`, README root, `src/backend/README.md`, `claude.md`, status catatan ide |
+
+### Keputusan saat eksekusi
+
+- Semua perubahan versi/counter sebuah bucket diserialkan dengan `UPDLOCK` pada baris bucket di dalam
+  transaksi serializable (ditambah `UPDLOCK, HOLDLOCK` pada baris object), sehingga kuota final dan alokasi
+  nomor versi aman untuk upload paralel.
+- Blob baru dibuat berstatus **Orphan** dan baru menjadi Ready di transaksi yang mencatat versi; sisa crash
+  otomatis menjadi kandidat GC setelah masa tenggang.
+- Kuota objek menghitung baris object (termasuk yang current-nya delete marker).
+- Operasi maintenance manual berjalan sebagai business task global (`objectstorage:gc|retention|repair`).
+- Endpoint publik menambahkan `X-Content-Type-Options: nosniff` dan `Content-Security-Policy: sandbox`
+  karena konten unggahan pengguna disajikan pada origin API.
+- Partial service digabung menjadi tiga berkas (umum+maintenance, Settings, Objects), bukan lima.
+- `Em.Test` tidak diberi contoh pemakaian (opsional di §9); dicatat di
+  [doc/ideas/object-storage-lanjutan.md](../../doc/ideas/object-storage-lanjutan.md).
+
+### Status pengujian
+
+| Uji | Hasil |
+| --- | --- |
+| Build `src/backend/Em.Api.slnx` | Lulus, 0 warning baru |
+| Build `src/frontend/Em.Ui.Wpf.slnx` (`-p:EnableWindowsTargeting=true` di Linux) | Lulus; hanya warning lama `Em.Test.Wpf` |
+| Unit test `Em.Api.Core.Tests` | 142 lulus, termasuk 54 test object storage (nama/key, CRC32, hash lock, volume folder lokal, validasi policy, aturan retensi) |
+| Translasi query EF → SQL | Diperiksa lewat `ToQueryString()` di harness sementara (scratchpad sesi, tanpa koneksi); semua query listing, retensi, GC, counter volume menghasilkan SQL valid. Satu query `DISTINCT` atas entity diganti agar tidak bergantung pada kolom `nvarchar(max)` |
+| Test integrasi `ObjectStoreTests` (13 test: dedup, versi/restore, delete marker, purge, kuota 409/413, replika 2 volume + repair, fallback baca + Missing, GC masa tenggang, upload paralel key sama, sisa crash, listing delimiter/continuation, retensi) | **Belum dijalankan**: ditulis dan terkompilasi, ter-skip karena tidak ada SQL Server. Fixture menjalankan skrip SQL asli dua kali (cek idempoten) |
+| Test view model/XAML WPF `ObjectStorageManagerTests` (6 test) | **Belum dijalankan**: terkompilasi, butuh Windows |
+| Skrip SQL di SQL Server, render/interaksi layar WPF, endpoint `/store`, uji HTTP live | **Belum diuji** |
+
+### Tindakan yang terblokir
+
+- Unduhan .NET SDK dari `builds.dotnet.microsoft.com` ditolak proxy (403); dipakai paket `dotnet-sdk-10.0` dari
+  repo Ubuntu.
+- Unduhan paket `mssql-server` dari `packages.microsoft.com` ditolak proxy (403) dan tidak diulang. Docker
+  daemon tidak tersedia. Karena itu test integrasi tidak bisa dijalankan di sesi ini.
+
+### Yang perlu dijalankan pengguna (Windows, SQL Server lokal)
+
+Dari root repo:
+
+```powershell
+dotnet test src/backend/Em.Api.slnx
+dotnet test src/frontend/Em.Ui.Wpf.slnx
+```
+
+Lalu terapkan `tables/060-objectstore.sql` dan `views/vi_Store*.sql` ke database aplikasi sebelum menjalankan
+`Em.Api` versi ini (atau matikan dengan `EM_MODULE_OBJECTSTORAGE=false`). Verifikasi visual layar Object
+Storage Manager (tema terang/gelap, busy/disabled, lebar sempit) menunggu konfirmasi pengguna sesuai aturan
+uji GUI.
+

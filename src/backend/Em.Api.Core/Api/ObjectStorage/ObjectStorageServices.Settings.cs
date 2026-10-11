@@ -149,6 +149,7 @@ public sealed partial class ObjectStorageServices
    [PostAction(claim: IObjectStorageServices.SettingsClaim)]
    public async Task<StorePolicyInfo> PostGetMeta_StorePolicySave(StorePolicySave request) {
       ArgumentNullException.ThrowIfNull(request);
+      request.VolumeIds ??= [];
       var name = StoreNames.DisplayName(request.Name, "Policy");
       ValidatePolicy(request);
       var now = DateTime.UtcNow;

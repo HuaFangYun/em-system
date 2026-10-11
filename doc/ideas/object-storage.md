@@ -1,8 +1,9 @@
 # Object storage Em
 
 - **Tanggal:** 2026-10-09
-- **Status:** jadi plan (2026-10-11; sebelumnya diskusi)
-- **Plan turunan:** [plan/unexecuted/object-storage.md](../../plan/unexecuted/object-storage.md)
+- **Status:** jadi plan (2026-10-11; sebelumnya diskusi) — plan sudah dieksekusi 2026-10-11
+- **Plan turunan:** [plan/executed/object-storage.md](../../plan/executed/object-storage.md)
+- **Guide:** [doc/engine/engine-object-storage.md](../engine/engine-object-storage.md)
 
 Catatan ini merekam rancangan ERD yang dilampirkan pengguna dan penjelasan
 awal. Ini bukan perintah implementasi. Nama tabel/kolom di bagian rekonstruksi
