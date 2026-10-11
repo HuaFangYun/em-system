@@ -670,6 +670,7 @@
    </Style>
 
    <Style x:Key="materialCalendarDayButtonStyle" TargetType="CalendarDayButton">
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}" />
       <Setter Property="Width" Value="32" />
       <Setter Property="Height" Value="32" />
       <Setter Property="Margin" Value="1" />
@@ -719,6 +720,7 @@
 
    <!-- A month in the year view, or a year in the decade view. -->
    <Style x:Key="materialCalendarButtonStyle" TargetType="CalendarButton">
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}" />
       <Setter Property="Width" Value="54" />
       <Setter Property="Height" Value="40" />
       <Setter Property="Margin" Value="2" />
@@ -755,6 +757,7 @@
    </Style>
 
    <Style x:Key="materialCalendarItemStyle" TargetType="CalendarItem">
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}" />
       <Setter Property="Template">
          <Setter.Value>
             <ControlTemplate TargetType="CalendarItem">
@@ -927,6 +930,7 @@
    </Style>
 
    <Style x:Key="inlineDatePickerStyle" TargetType="DatePicker">
+      <Setter Property="Foreground" Value="{DynamicResource themeWindowForegroundBrush}" />
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="Padding" Value="0" />

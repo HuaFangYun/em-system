@@ -21,6 +21,12 @@ biarkan pengguna melakukan push; jangan mencoba atau mengulang push tanpa
 permintaan eksplisit. Aturan ini mengesampingkan asumsi izin push dari alur
 kerja atau plan sebelumnya.
 
+## Commit hanya pada branch work-bench (keputusan pengguna 2026-10-11)
+
+Sebelum commit di `em-system`, periksa branch aktif. Jika branch aktif **bukan `work-bench`**,
+**jangan melakukan commit**, meskipun pengguna meminta commit. Beri tahu pengguna nama branch aktif
+dan bahwa commit belum dilakukan. Aturan ini juga berlaku untuk permintaan dari sesi repo lain.
+
 ## Registry mengikuti aplikasi host
 
 Keputusan pengguna 2026-10-09; berlaku untuk Codex dan Claude Code, juga repo turunan.
