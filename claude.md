@@ -21,6 +21,16 @@ biarkan pengguna melakukan push; jangan mencoba atau mengulang push tanpa
 permintaan eksplisit. Aturan ini mengesampingkan asumsi izin push dari alur
 kerja atau plan sebelumnya.
 
+Pengecualian sesi Claude Code web (keputusan pengguna 2026-10-11): pada sesi
+Claude Code di cloud (claude.ai/code, container sementara), agent **otomatis
+commit dan push** setelah pekerjaan selesai, tanpa menunggu permintaan push
+terpisah, karena isi container hilang saat sesi berakhir. Push hanya ke branch
+kerja yang ditetapkan untuk sesi itu; jangan push ke `main` atau branch lain,
+jangan force-push, dan jangan membuat tag. Bila push ditolak (mis. 403 akses
+GitHub), laporkan penyebabnya kepada pengguna dan jangan mencoba melewatinya.
+Sesi lokal (Claude Code di mesin pengguna) dan Codex tetap mengikuti aturan di
+atas.
+
 ## Registry mengikuti aplikasi host
 
 Keputusan pengguna 2026-10-09; berlaku untuk Codex dan Claude Code, juga repo turunan.
