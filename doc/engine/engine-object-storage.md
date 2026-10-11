@@ -1,5 +1,7 @@
 # Object storage
 
+[Bahasa Indonesia](engine-object-storage.id.md)
+
 A generic object storage engine inside the Em API: **buckets** hold **objects** (keys), every change of an
 object is a **version**, every version points to a content **blob** identified by its SHA-256, and every blob
 has one or more physical **copies** on **volumes**. A **policy** per bucket decides placement and replicas,
