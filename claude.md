@@ -37,6 +37,11 @@ Sebelum commit di `em-system`, periksa branch aktif. Jika branch aktif **bukan `
 **jangan melakukan commit**, meskipun pengguna meminta commit. Beri tahu pengguna nama branch aktif
 dan bahwa commit belum dilakukan. Aturan ini juga berlaku untuk permintaan dari sesi repo lain.
 
+Pengecualian (keputusan pengguna 2026-10-11): sesi Claude Code web (claude.ai/code) bekerja di
+branch `claude/...` yang ditetapkan untuk sesi itu, dan boleh commit serta push otomatis ke branch
+tersebut sesuai pengecualian sesi Claude Code web di bagian push di atas. Branch itu nantinya
+di-merge ke `work-bench` dari sesi lokal. Sesi lokal dan Codex tetap hanya commit di `work-bench`.
+
 ## Registry mengikuti aplikasi host
 
 Keputusan pengguna 2026-10-09; berlaku untuk Codex dan Claude Code, juga repo turunan.
