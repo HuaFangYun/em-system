@@ -341,3 +341,18 @@ Lalu terapkan `tables/060-objectstore.sql` dan `views/vi_Store*.sql` ke database
 Storage Manager (tema terang/gelap, busy/disabled, lebar sempit) menunggu konfirmasi pengguna sesuai aturan
 uji GUI.
 
+
+### Tindak lanjut 2026-10-11 (sesi lokal Windows)
+
+- `dotnet test src/backend/Em.Api.slnx` (217 lulus, termasuk 13 `ObjectStoreTests` terhadap SQL Server lokal)
+  dan `dotnet test src/frontend/Em.Ui.Wpf.slnx` (106 lulus, termasuk 6 `ObjectStorageManagerTests`); tidak ada
+  yang di-skip.
+- Skema (`060-objectstore.sql` + tiga view) diterapkan ke database lokal dan database pengembangan bersama;
+  masing-masing berisi 8 tabel, 3 view, `ObjectStoreSchemaVersion=1`. Target tercatat di catatan lokal
+  `..\.artefacts\em-system\config\db-migration-targets.md`.
+- **Terblokir:** penerapan ke database produksi (target `sqldb` host produk) ditolak classifier auto mode
+  (*Production Deploy*) dan tidak diulang. Agent menyiapkan skrip manual sekali pakai
+  (`plan/object-storage-manual/apply-objectstore-schema.ps1`: menjalankan `060-objectstore.sql` dan tiga view
+  lewat `sqlcmd` dengan konfirmasi). **Dijalankan pengguna 2026-10-11**; diverifikasi agent dengan query baca:
+  8 tabel, 3 view, schemaVersion 1. Skrip lalu dihapus atas keputusan pengguna karena langkah instalasi
+  standar sudah ada di `doc/engine/engine-object-storage.md`.
