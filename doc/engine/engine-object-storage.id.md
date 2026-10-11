@@ -211,6 +211,7 @@ core seperti manager lainnya. MAUI tidak punya layar ini.
   object browser: path breadcrumb, pseudo-folder dari `/`, upload (toolbar atau drag-drop file), download,
   delete, side sheet **Versions** (restore, download sebuah version, hapus permanen sebuah version), dan
   **Load more** untuk listing panjang. **New bucket**/**Edit** membuka side sheet (nama, policy, state, note).
+  **Open in tab** membuka bucket terpilih (di folder yang sedang dibuka bila sedang browse) di bucket editor.
 - **Volumes**: tabel volume dengan copy, ukuran, copy yang hilang, dan pemeriksaan folder langsung; editor
   dengan tombol **Check**.
 - **Policies**: tabel policy; editor dengan replika, retensi, kuota (MB), akses, dan daftar volume berurutan
@@ -219,6 +220,29 @@ core seperti manager lainnya. MAUI tidak punya layar ini.
   retensi dan repair, serta daftar task yang sedang berjalan.
 - Card di layar home: ukuran logis dibanding ukuran fisik dan jumlah volume bermasalah, dengan tombol refresh
   sendiri.
+
+### Bucket editor
+
+Navigasi `admin.objectstorage.bucket` (`EmApp.ObjectStorageBucketNavigationName`, jenis editor, claim
+`Object Storage Manager Access`) menampilkan satu bucket di tab sendiri: setting-nya (name, policy, state, note,
+dengan help saat hover, serta angka ukuran/kuota/akses) di atas object browser-nya (path, upload dan drag-drop,
+download, delete, side sheet versions, **Load more**). Navigasi ini wajib dibuka dengan
+`StoreBucketNavigationPayload`, sehingga layar mana pun bisa melempar sebuah bucket berdasarkan nama dan
+opsional folder:
+
+```csharp
+// Dari view model yang dibangun lewat navigasi (MvvmModelBase.NavigationEntry):
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName,
+   StoreBucketNavigationPayload.Open("invoices", "2026/"));
+
+// Bucket baru; object-nya bisa dikelola setelah bucket disimpan.
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName, StoreBucketNavigationPayload.New());
+```
+
+Judul tab adalah `Bucket: <nama>` (`New Bucket` sampai bucket baru disimpan), jadi membuka bucket yang sudah
+terbuka akan pindah ke tab-nya. Menyimpan setting dan menghapus version secara permanen tetap butuh
+`Object Storage Settings Manage` di server. Nama bucket yang tidak ada membuat halaman kosong dengan pesan.
+Editor memakai view model yang sama dengan manager (`ObjectStorageManagerVm` dalam mode bucket page).
 
 ## Batasan versi 1
 

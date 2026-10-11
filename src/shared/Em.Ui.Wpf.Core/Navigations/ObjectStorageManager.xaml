@@ -57,6 +57,12 @@
                         <TextBlock Text="Browse" VerticalAlignment="Center"/>
                      </StackPanel>
                   </Button>
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[OpenBucketPageCommand]}" Margin="8,0,0,0" ToolTip="Open the bucket editor in its own tab: settings and objects on one screen.">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_UpRightFromSquare" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Open in tab" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
                   <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[EditBucketCommand]}" Margin="8,0,0,0">
                      <StackPanel Orientation="Horizontal">
                         <fa:FontAwesome Icon="Solid_Pen" Style="{StaticResource buttonIconStyle}"/>

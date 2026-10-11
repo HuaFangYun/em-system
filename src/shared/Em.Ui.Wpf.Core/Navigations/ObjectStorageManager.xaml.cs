@@ -21,14 +21,19 @@ public partial class ObjectStorageManager : UserControl, INavigationBody
    /// <summary>Creates the Object Storage Manager.</summary>
    public ObjectStorageManager(EmApp app) {
       InitializeComponent();
-      Vm.EmApp = app;
-      Window Owner() => Window.GetWindow(this) ?? app.MainWindow;
-      Vm.Confirm = (message, title) => Owner().ShowMboxDecideWarning(message, title) == MessageBoxResult.Yes;
-      Vm.PickUploadFiles = () => {
+      AttachDialogs(Vm, this, app);
+   }
+
+   /// <summary>Gives the view model its confirm, open-file and save-file dialogs, owned by the window of <paramref name="view"/>.</summary>
+   internal static void AttachDialogs(ObjectStorageManagerVm vm, FrameworkElement view, EmApp app) {
+      vm.EmApp = app;
+      Window Owner() => Window.GetWindow(view) ?? app.MainWindow;
+      vm.Confirm = (message, title) => Owner().ShowMboxDecideWarning(message, title) == MessageBoxResult.Yes;
+      vm.PickUploadFiles = () => {
          var dialog = new OpenFileDialog { Title = "Upload to object storage", Multiselect = true, CheckFileExists = true };
          return dialog.ShowDialog(Owner()) == true ? dialog.FileNames : null;
       };
-      Vm.PickSavePath = name => {
+      vm.PickSavePath = name => {
          var dialog = new SaveFileDialog { Title = "Download from object storage", FileName = name, Filter = "All files|*.*" };
          return dialog.ShowDialog(Owner()) == true ? dialog.FileName : null;
       };

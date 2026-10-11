@@ -104,7 +104,11 @@ public sealed partial class ObjectStorageManagerVm : MvvmModelBase
    }
 
    /// <summary>Loads buckets, volumes, policies and status.</summary>
-   public Task ReloadAsync() => RunAsync("Loading object storage...", async () => {
+   public Task ReloadAsync() => RunAsync(IsBucketPage ? "Loading bucket..." : "Loading object storage...", async () => {
+      if (IsBucketPage) {
+         await LoadBucketPageCoreAsync();
+         return;
+      }
       await LoadSettingsAsync();
       await LoadBucketsAsync();
       await LoadStatusAsync();
