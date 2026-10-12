@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using Em.Api.Core.Models;
 using Em.Shared;
 using Em.Ui.Wpf.Navigations;
+using Em.Ui.Wpf.Shared;
 
 namespace Em.Ui.Wpf.Core.Tests;
 
@@ -112,6 +113,58 @@ public class ObjectStorageManagerTests
       Assert.Equal(1, service.BucketDeletes);
       Assert.Contains("still holds objects", vm.Status);
       Assert.True(vm.IsNotBusy);
+   }
+
+   [WpfFact]
+   public void BucketEditorXamlLoadsWithoutRendering() {
+      var app = (EmApp)RuntimeHelpers.GetUninitializedObject(typeof(EmApp));
+      var view = new StoreBucketEditor(app);
+      Assert.IsType<System.Windows.Controls.ListBox>(view.FindName("objectList"));
+      Assert.False(view.Vm.IsBucketPage);
+   }
+
+   [Fact]
+   public async Task BucketPageOpensBucketByNameAtItsFolder() {
+      var service = new StubService();
+      var vm = new ObjectStorageManagerVm(service);
+      await vm.LoadBucketPageAsync(StoreBucketNavigationPayload.Open("files", "photos"));
+      Assert.True(vm.IsBucketPage);
+      Assert.True(vm.IsBrowsing);
+      Assert.False(vm.IsNewBucket);
+      Assert.Equal("b1", vm.OpenBucket?.Id);
+      Assert.Equal("photos/", vm.Prefix);
+      Assert.Equal("photos/", service.LastPrefix);
+      Assert.Equal("Default", vm.BucketDraftPolicy?.Name);
+      Assert.True(vm.Commands[nameof(vm.SaveBucketCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.UploadCommand)]!.CanExecute());
+
+      await vm.RefreshCommand();
+      Assert.Equal("photos/", vm.Prefix);
+   }
+
+   [Fact]
+   public async Task BucketPageReportsUnknownBucketAndStartsNewOnes() {
+      var missing = new ObjectStorageManagerVm(new StubService());
+      await missing.LoadBucketPageAsync(StoreBucketNavigationPayload.Open("nope"));
+      Assert.False(missing.IsBrowsing);
+      Assert.Contains("does not exist", missing.Status);
+      Assert.False(missing.Commands[nameof(missing.SaveBucketCommand)]!.CanExecute());
+
+      var created = new ObjectStorageManagerVm(new StubService());
+      await created.LoadBucketPageAsync(StoreBucketNavigationPayload.New());
+      Assert.True(created.IsBucketPageNew);
+      Assert.False(created.IsBrowsing);
+      Assert.Equal("", created.BucketDraftName);
+      Assert.Equal("pol", created.BucketDraftPolicy?.Id);
+      Assert.True(created.Commands[nameof(created.SaveBucketCommand)]!.CanExecute());
+   }
+
+   [Fact]
+   public void BucketPayloadNormalizesPrefixAndTitle() {
+      Assert.Equal("a/b/", StoreBucketNavigationPayload.Open("files", "/a/b").Prefix);
+      Assert.Equal("", StoreBucketNavigationPayload.Open("files").Prefix);
+      Assert.Equal("Bucket: files", StoreBucketNavigationPayload.Open(" files ").Title);
+      Assert.Equal("New Bucket", StoreBucketNavigationPayload.New().Title);
    }
 
    [Fact]

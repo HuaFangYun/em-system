@@ -43,6 +43,13 @@ namespace Em.Ui.Wpf.Core
       /// </summary>
       public const string PdfViewerNavigationName = "em.viewer.pdf";
 
+      /// <summary>
+      /// The navigation name of the object storage bucket editor: one bucket's settings and its objects on one
+      /// screen. It must be opened with a <see cref="StoreBucketNavigationPayload"/> and needs the
+      /// <c>Object Storage Manager Access</c> claim.
+      /// </summary>
+      public const string ObjectStorageBucketNavigationName = "admin.objectstorage.bucket";
+
       #endregion
 
        /// <summary>
@@ -413,6 +420,13 @@ namespace Em.Ui.Wpf.Core
             BodyType = BodyType.Of<ObjectStorageManager>(), Kind = NavigationKind.Manager, EmApp = app,
             RequireParameter = false, IsMenuVisible = false,
             NavigationIcon = EFontAwesomeIcon.Solid_Database.CreateImageSource(System.Windows.Media.Brushes.Gray)
+         }, "Administrative Tools:" + IObjectStorageServices.ManagerClaim));
+         app.AddNavigation(RequireClaim(new Navigation {
+            Name = ObjectStorageBucketNavigationName, Title = "Bucket Editor", Subtitle = "Bucket settings and objects", OrderIndex = -1,
+            Description = "Edit one bucket and manage its objects and versions.",
+            BodyType = BodyType.Of<StoreBucketEditor>(), Kind = NavigationKind.Editor, EmApp = app,
+            RequireParameter = true, IsMenuVisible = false,
+            NavigationIcon = EFontAwesomeIcon.Solid_FolderOpen.CreateImageSource(System.Windows.Media.Brushes.Gray)
          }, "Administrative Tools:" + IObjectStorageServices.ManagerClaim));
       }
 

@@ -1,5 +1,7 @@
 # Object storage
 
+[Bahasa Indonesia](engine-object-storage.id.md)
+
 A generic object storage engine inside the Em API: **buckets** hold **objects** (keys), every change of an
 object is a **version**, every version points to a content **blob** identified by its SHA-256, and every blob
 has one or more physical **copies** on **volumes**. A **policy** per bucket decides placement and replicas,
@@ -201,10 +203,12 @@ copies missing and replaces them. Copies interrupted while writing are treated a
 Navigation `admin.objectstorage` (Administrative Tools, claim `Object Storage Manager Access`), registered by
 the core like the other managers. MAUI has no screen.
 
-- **Buckets**: bucket table (policy, objects, logical size, quota, access). Double-click or **Browse** opens
+- **Buckets**: bucket table (policy, objects, logical size, quota, access). Double-click opens the bucket in the
+  bucket editor on a new tab (see below). **Browse** opens
   the object browser: breadcrumb path, pseudo-folders from `/`, upload (toolbar or drag-drop of files),
   download, delete, **Versions** side sheet (restore, download a version, delete a version permanently),
   **Load more** for long listings. **New bucket**/**Edit** open a side sheet (name, policy, state, note).
+  **Open in tab** opens the selected bucket (at the current folder while browsing) in the bucket editor.
 - **Volumes**: volume table with copies, size, missing copies and a live folder check; editor with **Check**.
 - **Policies**: policy table; editor with replicas, retention, quotas (MB), access and the ordered volume list
   (check to include, arrows to reorder).
@@ -212,6 +216,28 @@ the core like the other managers. MAUI has no screen.
   and repair runs, and the running task list.
 - Home screen card: logical versus physical size and the number of volumes with problems, with its own
   refresh button.
+
+### Bucket editor
+
+Navigation `admin.objectstorage.bucket` (`EmApp.ObjectStorageBucketNavigationName`, editor kind, claim
+`Object Storage Manager Access`) shows one bucket on its own tab: its settings (name, policy, state, note,
+with hover help, and size/quota/access figures) above its object browser (path, upload and drag-drop,
+download, delete, versions side sheet, **Load more**). It must be opened with a `StoreBucketNavigationPayload`,
+so any screen can hand a bucket over by name and optionally a folder:
+
+```csharp
+// From a view model built through navigation (MvvmModelBase.NavigationEntry):
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName,
+   StoreBucketNavigationPayload.Open("invoices", "2026/"));
+
+// A new bucket; its objects can be managed once it is saved.
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName, StoreBucketNavigationPayload.New());
+```
+
+The tab title is `Bucket: <name>` (`New Bucket` until a new bucket is saved), so opening a bucket that is
+already open switches to its tab. Saving settings and deleting versions permanently still need
+`Object Storage Settings Manage` on the server. An unknown bucket name leaves the page empty with a message.
+The editor uses the same view model as the manager (`ObjectStorageManagerVm` in bucket page mode).
 
 ## Limits of version 1
 

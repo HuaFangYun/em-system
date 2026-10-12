@@ -119,7 +119,9 @@ public sealed partial class ObjectStorageManagerVm
       RegisterCommand(nameof(EditBucketCommand), EditBucketCommand, () => CanActOnBucket && !IsBrowsing);
       RegisterCommand(nameof(DeleteBucketCommand), DeleteBucketCommand, () => CanActOnBucket && !IsBrowsing);
       RegisterCommand(nameof(OpenBucketCommand), OpenBucketCommand, () => CanActOnBucket && !IsBrowsing);
-      RegisterCommand(nameof(SaveBucketCommand), SaveBucketCommand, () => CanEdit && IsBucketEditorOpen);
+      RegisterCommand(nameof(SaveBucketCommand), SaveBucketCommand, () => CanEdit && (IsBucketEditorOpen || (IsBucketPage && IsLoaded && !IsEditorOpen)));
+      RegisterCommand(nameof(OpenBucketPageCommand), OpenBucketPageCommand, () => CanActOnBucket && !IsBucketPage && NavigationEntry is not null);
+      RegisterCommand(nameof(NewBucketPageCommand), NewBucketPageCommand, () => CanBrowse && !IsBucketPage && Policies.Count > 0 && NavigationEntry is not null);
       RegisterCommand(nameof(CloseBrowserCommand), CloseBrowserCommand, () => CanBrowse && IsBrowsing);
       RegisterCommand<StoreCrumb>(nameof(NavigateCrumbCommand), NavigateCrumbCommand, c => CanBrowse && IsBrowsing && c is not null && c.Prefix != Prefix);
       RegisterCommand(nameof(OpenItemCommand), OpenItemCommand, () => CanBrowse && IsBrowsing && SelectedItem is not null);
@@ -172,8 +174,11 @@ public sealed partial class ObjectStorageManagerVm
          Id = _bucketEditId, Name = BucketDraftName.Trim(), PolicyId = BucketDraftPolicy?.Id ?? "", State = BucketDraftState, Note = BucketDraftNote
       });
       IsBucketEditorOpen = false;
-      await LoadBucketsAsync();
-      SelectedBucket = Buckets.FirstOrDefault(b => b.Id == saved.Id);
+      if (IsBucketPage) await AfterBucketPageSaveAsync(saved);
+      else {
+         await LoadBucketsAsync();
+         SelectedBucket = Buckets.FirstOrDefault(b => b.Id == saved.Id);
+      }
       Status = $"Bucket '{saved.Name}' saved.";
    });
 

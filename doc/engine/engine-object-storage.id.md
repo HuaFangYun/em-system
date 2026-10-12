@@ -1,0 +1,272 @@
+# Object storage
+
+[English](engine-object-storage.md)
+
+Engine object storage generik di dalam Em API: **bucket** menampung **object** (key), setiap perubahan object
+adalah sebuah **version**, setiap version menunjuk ke **blob** konten yang diidentifikasi dengan SHA-256-nya,
+dan setiap blob punya satu atau lebih **copy** fisik di **volume**. Sebuah **policy** per bucket menentukan
+penempatan dan replika, retensi version, kuota, serta akses publik.
+
+Ini adalah layanan internal Em: modul sisi server memakai `IObjectStore`, administrator memakai
+**Object Storage Manager** di klien WPF, dan bucket public-read dilayani di `/store`. Protokol S3 **tidak**
+diimplementasikan; desainnya hanya menyisakan jalan untuk adapter S3 di kemudian hari (lihat
+[Kesiapan S3](#kesiapan-s3)).
+
+## Mengaktifkan
+
+1. Jalankan di database core (SQL Server), setelah `tables/010-core.sql`:
+   - [`doc/sqlscript/mssql/tables/060-objectstore.sql`](../sqlscript/mssql/tables/060-objectstore.sql)
+   - lalu view [`views/vi_StoreBucket.sql`](../sqlscript/mssql/views/vi_StoreBucket.sql),
+     [`views/vi_StoreObject.sql`](../sqlscript/mssql/views/vi_StoreObject.sql) dan
+     [`views/vi_StoreVolume.sql`](../sqlscript/mssql/views/vi_StoreVolume.sql).
+
+   Semua skrip aman dijalankan ulang. Tidak perlu migrasi data yang sudah ada: CDN, container registry,
+   server NuGet, dan storage approval tidak dipindahkan ke object storage.
+2. Di host API, panggil `builder.AddObjectStorage()`. Host contoh `Em.Api` melakukannya kecuali dimatikan
+   lewat saklar modul `"modules": { "objectStorage": false }` (atau `EM_MODULE_OBJECTSTORAGE=false`).
+3. Berikan claim di bawah ke administrator, buka **Object Storage Manager**, lalu buat minimal satu volume,
+   satu policy, dan satu bucket.
+
+Startup gagal dengan pesan yang jelas bila tabel atau baris versi skema (`ObjectStoreSchemaVersion` di
+`ta_Meta`) tidak ada.
+
+Volume, policy, dan bucket disimpan di database, bukan di `emapi-config.json`; perubahan langsung berlaku
+saat disimpan, tanpa restart.
+
+### Claim
+
+Keduanya ada di modul `Administrative Tools`:
+
+| Claim | Mengizinkan |
+| --- | --- |
+| `Object Storage Manager Access` | Membuka manager; melihat daftar bucket, object, version, volume, policy, status; upload, download, delete (delete marker), restore |
+| `Object Storage Settings Manage` | Volume, policy, membuat/mengubah/menghapus bucket, menghapus version secara permanen, menjalankan garbage collection, retensi, dan repair |
+
+### Hanya satu instance
+
+Object storage mengasumsikan **satu instance API per database dan set volume**. Penguncian blob dan garbage
+collection memakai lock di dalam proses. Saat startup dan setiap beberapa menit, instance memperbarui baris
+lease `ObjectStore.Lease` di `ta_Meta`; bila instance lain memperbaruinya dalam sepuluh menit terakhir, sebuah
+peringatan dicatat di log. Ini hanya peringatan, bukan jaminan.
+
+## Konsep
+
+| Item | Aturan |
+| --- | --- |
+| Nama bucket | Aturan S3: 3–63 karakter huruf kecil, angka, `-` dan `.`, diawali dan diakhiri huruf atau angka, tanpa `..`, bukan alamat IP, tanpa awalan `xn--` atau akhiran `-s3alias`. Tidak bisa diubah setelah dibuat. |
+| Key object | UTF-8, peka huruf besar/kecil, 1–1024 byte, tanpa karakter kontrol, tanpa segmen `.` atau `..`. `/` hanya konvensi untuk listing per prefix; tidak ada folder sungguhan. Key tidak pernah menjadi path file. |
+| Version | Selalu aktif. Upload ke key yang sudah ada menambah version current baru. Nomor version berasal dari penghitung per object yang tidak pernah mundur. |
+| Delete | Menambah **delete marker** sebagai version current: object hilang dari listing tetapi riwayatnya tetap ada. Menghapus object yang sudah terhapus tidak mengubah apa pun. |
+| Restore | Menambah version baru yang menunjuk ke konten version lama; tidak ada byte yang disalin. |
+| Hapus permanen (purge) | Menghapus satu version. Bila version itu current, version tersisa terbaru yang bukan delete marker menjadi current; bila tidak ada version tersisa, object dihapus. |
+| Blob | Konten yang diidentifikasi dengan SHA-256 dan dipakai bersama lintas bucket (deduplikasi global). CRC32 disimpan untuk pemeriksaan cepat copy. |
+| MIME type dan metadata | Per version. Metadata: maksimal 32 entri, key berupa huruf, angka, `.`, `_`, `-` (maks. 128), nilai maksimal 1024 karakter. |
+
+### Policy
+
+| Field | Arti |
+| --- | --- |
+| Volumes (berurutan) | Volume tempat policy boleh menaruh blob; volume aktif pertama menerima upload lebih dulu. Jumlahnya minimal sebanyak target replika. |
+| Minimum replicas | Jumlah copy yang ditulis sebelum upload dianggap berhasil (minimal 1). |
+| Target replicas | Jumlah copy yang dituju replikasi di background (≥ minimum, maksimal 16). |
+| Keep old versions | Jumlah version non-current yang disimpan per object; kosong berarti simpan semua, `0` berarti tidak ada yang disimpan. |
+| Keep old versions for (days) | Umur maksimal version non-current; kosong berarti disimpan selamanya. |
+| Quota / object quota | Per bucket: byte logis dari **setiap version yang disimpan** (bukan byte fisik setelah deduplikasi) dan jumlah object (object terhapus yang masih punya riwayat tetap dihitung). Bila terlampaui, hasilnya 409. |
+| Max object size | Upload yang lebih besar dihentikan saat streaming dan dijawab 413. |
+| Access | `Private`, atau `PublicRead` untuk melayani object di `/store/<bucket>/<key>`. |
+| State | Policy `Disabled` tetap dipakai bucket yang sudah ada, tetapi tidak bisa diberikan ke bucket baru. |
+
+Mengubah daftar volume sebuah policy tidak memindahkan data yang sudah ada. Upload baru mengikuti daftar
+baru; blob lama mendapat copy yang kurang di volume baru lewat repair. Tidak ada rebalancing otomatis.
+
+### Volume
+
+Versi 1 punya satu jenis volume: **LocalFolder**, sebuah folder di server API (disk lokal atau share NAS yang
+di-mount). Path-nya absolut atau relatif terhadap content root API dan diperiksa (bisa dijangkau, bisa
+ditulis, ruang kosong) sebelum disimpan. Volume yang sudah menyimpan copy tidak bisa diganti path-nya. State:
+
+- `Active`: dibaca dan ditulis.
+- `ReadOnly`: hanya dibaca; copy di dalamnya tetap dihitung sebagai replika.
+- `Offline`: dilewati untuk baca dan tulis; garbage collection menunggu volume ini.
+
+Susunan di disk:
+
+```text
+<volume>/blobs/<hex[0..2]>/<hex[2..4]>/<sha256-hex>   konten blob, read-only setelah ditulis
+<volume>/.staging/<ulid>                              upload yang sedang berjalan, dihapus saat startup
+```
+
+## Memakai dari modul
+
+`IObjectStore` berlingkup scoped; ambil dari dependency injection di service atau request handler. Bucket
+harus sudah ada.
+
+```csharp
+public sealed class InvoiceArchive(IObjectStore store)
+{
+   public async Task<string> SaveAsync(string invoiceNo, Stream pdf, CancellationToken ct)
+   {
+      var info = await store.PutAsync("invoices", $"2026/{invoiceNo}.pdf", pdf, "application/pdf",
+         new Dictionary<string, string> { ["invoice"] = invoiceNo }, ct);
+      return $"{info.Key} v{info.Version}";
+   }
+
+   public async Task<Stream> OpenAsync(string invoiceNo, CancellationToken ct) =>
+      (await store.OpenAsync("invoices", $"2026/{invoiceNo}.pdf", ct: ct)).Content;
+}
+```
+
+| Method | Fungsi |
+| --- | --- |
+| `PutAsync(bucket, key, content, mime, metadata)` | Menyimpan version current baru (di-stream; konten di-hash sambil ditulis). |
+| `OpenAsync(bucket, key, version?)` | Membuka version current atau version tertentu; stream-nya seekable. 404 untuk delete marker. |
+| `GetAsync(bucket, key)` | Info version current, juga bila berupa delete marker; `null` bila key tidak punya riwayat. |
+| `DeleteAsync(bucket, key)` | Menambah delete marker. |
+| `RestoreAsync(bucket, key, version)` | Version baru dengan konten dari `version`. |
+| `PurgeVersionAsync(bucket, key, version)` | Menghapus satu version secara permanen. |
+| `ListAsync(bucket, prefix, delimiter, continuation, limit)` | Key berurutan; dengan `delimiter` (`/`) key dikelompokkan menjadi common prefix. Pakai `NextContinuation` untuk halaman berikutnya. |
+| `VersionsAsync(bucket, key)` | Semua version, terbaru lebih dulu. |
+
+Error berupa `ActionException` dengan status HTTP: 400 nama atau key tidak valid, 404 bucket/object/version
+tidak ada, 409 kuota terlampaui atau bucket read-only, 413 object terlalu besar, 503 volume aktif tidak cukup
+atau tidak ada copy yang bisa dibaca.
+
+### Adapter IBinaryStorage
+
+`ObjectStoreBinaryStorage(IObjectStore store, string bucket)` mengimplementasikan `IBinaryStorage` di atas satu
+bucket. Adapter ini mempertahankan aturan tanpa-timpa (key yang sudah punya version apa pun ditolak dengan
+409) dan `DeleteAsync` menghapus permanen semua version. Adapter ini tidak didaftarkan oleh engine dan tidak
+menggantikan binary storage milik engine approval; buat sendiri di modul yang membutuhkannya.
+
+## Endpoint baca publik
+
+`GET` dan `HEAD /store/<bucket>/<key>` melayani version current sebuah object di bucket yang policy-nya
+`PublicRead`, tanpa identitas, di luar action dispatcher (tanpa action timeout atau rate limit), seperti
+`/cdn`. Range request, `ETag` (diturunkan dari ID object dan version, tidak pernah dari hash internal),
+`If-None-Match`, dan `Last-Modified` didukung. Respons membawa `X-Content-Type-Options: nosniff` dan
+`Content-Security-Policy` yang bersifat sandbox, karena kontennya diunggah pengguna dan dilayani di origin API.
+Selain itu — bucket private, object terhapus, nama tidak valid, method lain — hasilnya 404 biasa.
+
+Key diambil dari path request mentah dan di-percent-decode satu kali, jadi `a%20b/c.txt` membaca key
+`a b/c.txt`.
+
+## Action manajemen
+
+`IObjectStorageServices` (modul `Administrative Tools`):
+
+| Area | Action |
+| --- | --- |
+| Status | `GetMeta_StoreStatus` (penghitung, volume bermasalah, copy yang hilang, blob yang kurang replika dan blob orphan, task pemeliharaan, proses background terakhir) |
+| Volume | `GetMeta_StoreVolumes`, `PostGetMeta_StoreVolumeValidate`, `PostGetMeta_StoreVolumeSave`, `PostMeta_StoreVolumeDelete` (hanya bila tanpa copy dan tidak dipakai policy mana pun) |
+| Policy | `GetMeta_StorePolicies`, `PostGetMeta_StorePolicySave`, `PostMeta_StorePolicyDelete` (hanya bila tidak dipakai bucket mana pun) |
+| Bucket | `GetMeta_StoreBuckets`, `PostGetMeta_StoreBucketSave`, `PostMeta_StoreBucketDelete` (hanya bila tidak berisi object, termasuk yang sudah terhapus) |
+| Object | `GetMeta_StoreObjects(bucketId, prefix, delimiter, continuation, limit)`, `GetMeta_StoreObject`, `PostGetMeta_StoreObjectUpload(request, content)` (di-stream), `GetMeta_StoreObjectDownload(bucketId, key, version)` (di-stream), `PostMeta_StoreObjectDelete` |
+| Version | `GetMeta_StoreObjectVersions`, `PostGetMeta_StoreObjectRestore`, `PostMeta_StoreObjectVersionPurge` |
+| Pemeliharaan | `GetMeta_StoreGcReview(graceHours)`, `PostGetMeta_StoreGcRun(graceHours)`, `PostGetMeta_StoreRetentionRun`, `PostGetMeta_StoreRepairRun`, `GetMeta_StoreTasks` |
+
+Semua action GET hanya menerima parameter sederhana. Proses pemeliharaan memulai business task global (key
+`objectstorage:gc`, `objectstorage:retention`, `objectstorage:repair`) yang terlihat di manager dan di
+Business Task Manager.
+
+## Cara kerja
+
+**Upload.** Pemeriksaan nama, key, dan ukuran; pemeriksaan kuota awal terhadap penghitung bucket. Konten
+di-stream ke `.staging` di volume aktif pertama milik policy sambil SHA-256, CRC32, dan ukurannya dihitung
+(ukuran object maksimal ditegakkan selama streaming). Di bawah lock per hash: bila blob sudah punya cukup copy
+siap di volume policy, file staging dibuang (deduplikasi); bila belum, copy ditulis (volume lain lebih dulu,
+diverifikasi dengan ukuran dan CRC32, lalu file staging dipindahkan ke tempatnya secara atomik). Baris blob
+baru dimulai sebagai orphan. Kemudian satu transaksi serializable mengunci baris bucket dan baris object,
+mengalokasikan nomor version berikutnya, menyisipkan version, menjadikannya current, memperbarui penghitung
+bucket, menegakkan kuota (409 dan rollback bila terlampaui), dan menjadikan blob ready. Bila blob punya copy
+lebih sedikit dari target replika, replikasi background diberi sinyal.
+
+Crash di titik mana pun paling banyak meninggalkan file staging (dihapus saat startup) dan blob orphan
+(dihapus garbage collection setelah grace period). Tidak pernah ada version yang menunjuk ke blob tanpa copy
+yang siap.
+
+**Baca.** Copy siap pertama di volume yang tidak offline, sesuai urutan volume policy, yang file-nya ada
+dengan ukuran yang diharapkan. File yang hilang atau ukurannya salah ditandai `Missing` dan replikasi diberi
+sinyal; copy berikutnya dicoba.
+
+**Retensi** (setiap enam jam dan saat diminta): per bucket, version non-current yang melebihi *Keep old
+versions* atau lebih tua dari *Keep … days* dihapus permanen; object yang version tersisanya hanya sebuah
+delete marker dihapus.
+
+**Garbage collection** (saat diminta, review lebih dulu): blob yang tidak dirujuk version mana pun ditandai
+orphan; orphan yang dirujuk lagi kembali menjadi ready; orphan yang lebih tua dari grace period (bawaan 24 jam,
+1–720) dihapus dari setiap volume, lalu barisnya. Setiap blob dihapus di bawah lock hash-nya setelah
+diperiksa lagi bahwa tidak ada version yang merujuknya. Blob yang punya copy di volume offline dilewati.
+
+**Replikasi dan repair.** Di background (diberi sinyal setelah upload dan minimal setiap jam), blob dengan
+copy siap lebih sedikit dari target replika tertinggi di antara policy yang merujuknya mendapat copy baru di
+volume aktif policy tersebut. **Repair** (saat diminta) juga memeriksa file dan ukuran setiap copy, menandai
+copy yang hilang sebagai missing, dan menggantinya. Copy yang terputus saat ditulis dianggap missing.
+
+## Object Storage Manager (WPF)
+
+Navigasi `admin.objectstorage` (Administrative Tools, claim `Object Storage Manager Access`), didaftarkan oleh
+core seperti manager lainnya. MAUI tidak punya layar ini.
+
+- **Buckets**: tabel bucket (policy, object, ukuran logis, kuota, akses). Double-click membuka bucket di bucket
+  editor pada tab baru (lihat di bawah). **Browse** membuka
+  object browser: path breadcrumb, pseudo-folder dari `/`, upload (toolbar atau drag-drop file), download,
+  delete, side sheet **Versions** (restore, download sebuah version, hapus permanen sebuah version), dan
+  **Load more** untuk listing panjang. **New bucket**/**Edit** membuka side sheet (nama, policy, state, note).
+  **Open in tab** membuka bucket terpilih (di folder yang sedang dibuka bila sedang browse) di bucket editor.
+- **Volumes**: tabel volume dengan copy, ukuran, copy yang hilang, dan pemeriksaan folder langsung; editor
+  dengan tombol **Check**.
+- **Policies**: tabel policy; editor dengan replika, retensi, kuota (MB), akses, dan daftar volume berurutan
+  (centang untuk menyertakan, panah untuk mengubah urutan).
+- **Maintenance**: penghitung status, garbage collection (grace period, **Review**, lalu **Run**), menjalankan
+  retensi dan repair, serta daftar task yang sedang berjalan.
+- Card di layar home: ukuran logis dibanding ukuran fisik dan jumlah volume bermasalah, dengan tombol refresh
+  sendiri.
+
+### Bucket editor
+
+Navigasi `admin.objectstorage.bucket` (`EmApp.ObjectStorageBucketNavigationName`, jenis editor, claim
+`Object Storage Manager Access`) menampilkan satu bucket di tab sendiri: setting-nya (name, policy, state, note,
+dengan help saat hover, serta angka ukuran/kuota/akses) di atas object browser-nya (path, upload dan drag-drop,
+download, delete, side sheet versions, **Load more**). Navigasi ini wajib dibuka dengan
+`StoreBucketNavigationPayload`, sehingga layar mana pun bisa melempar sebuah bucket berdasarkan nama dan
+opsional folder:
+
+```csharp
+// Dari view model yang dibangun lewat navigasi (MvvmModelBase.NavigationEntry):
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName,
+   StoreBucketNavigationPayload.Open("invoices", "2026/"));
+
+// Bucket baru; object-nya bisa dikelola setelah bucket disimpan.
+await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName, StoreBucketNavigationPayload.New());
+```
+
+Judul tab adalah `Bucket: <nama>` (`New Bucket` sampai bucket baru disimpan), jadi membuka bucket yang sudah
+terbuka akan pindah ke tab-nya. Menyimpan setting dan menghapus version secara permanen tetap butuh
+`Object Storage Settings Manage` di server. Nama bucket yang tidak ada membuat halaman kosong dengan pesan.
+Editor memakai view model yang sama dengan manager (`ObjectStorageManagerVm` dalam mode bucket page).
+
+## Batasan versi 1
+
+Belum termasuk: protokol S3 dan presigned URL, provider volume remote, hak per bucket untuk user atau role,
+pengosongan (drain) volume dan rebalancing otomatis, banyak instance API, enkripsi at rest, object lock,
+lifecycle rule selain retensi version, pemindahan storage CDN/registry/NuGet/approval ke object storage, dan
+layar MAUI. Engine memakai locking hint khusus SQL Server; provider database lain tidak didukung untuk object
+storage.
+
+## Kesiapan S3
+
+Dipertahankan di versi 1 agar adapter S3 tidak mengubah skema inti: semua logika lewat `IObjectStore` (adapter
+hanya menangani transport, SigV4, XML, dan kode error); nama bucket dan batas key mengikuti S3; key peka huruf
+besar/kecil; version membawa MIME type dan metadata sendiri; delete marker ada dan restore adalah version
+baru; listing memakai prefix, delimiter, dan continuation token yang opaque. Belum ada: ID version eksternal
+(encoding stabil dari ID object dan nomor version), ETag (MD5 untuk upload tunggal dan aturan multipart,
+ditambahkan bersama adapter; SHA-256 tidak pernah menjadi ETag), dan tabel multipart upload.
+
+## Catatan maintainer
+
+- Unit test: `tests/Em.Api.Core.Tests/ObjectStorage/` (nama, key, CRC32, hash lock, volume lokal, validasi
+  policy, aturan retensi). Test integrasi terhadap SQL Server:
+  `tests/Em.Api.Core.IntegrationTests/ObjectStoreTests.cs` (membuat skema dari skrip SQL asli dan dilewati bila
+  server tidak bisa dijangkau). Test view model: `tests/Em.Ui.Wpf.Core.Tests/ObjectStorageManagerTests.cs`.
+- Listing memakai collation biner `cStoreObjectKey` dan kolom computed berindeks `cStoreObjectKeyPrefix`
+  (400 karakter pertama). Performa listing pada bucket besar belum diukur.

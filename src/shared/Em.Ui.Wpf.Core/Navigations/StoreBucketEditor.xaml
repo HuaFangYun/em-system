@@ -1,0 +1,283 @@
+<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:Em.Ui.Wpf.Navigations" xmlns:controls="clr-namespace:Em.Ui.Wpf.Controls" xmlns:fa="http://schemas.fontawesome.com/icons/fonts" x:Class="Em.Ui.Wpf.Navigations.StoreBucketEditor" x:Name="bucketRoot">
+   <UserControl.DataContext>
+      <local:ObjectStorageManagerVm/>
+   </UserControl.DataContext>
+   <UserControl.Resources>
+      <ResourceDictionary>
+         <ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="pack://application:,,,/Em.Ui.Wpf.Core;component/Styles/MaterialDesign.xaml"/>
+         </ResourceDictionary.MergedDictionaries>
+         <BooleanToVisibilityConverter x:Key="boolVisibility"/>
+         <Style x:Key="storeRowStyle" TargetType="ListBoxItem" BasedOn="{StaticResource listRowStyle}">
+            <EventSetter Event="MouseDoubleClick" Handler="OnRowDoubleClick"/>
+         </Style>
+         <Style x:Key="storeSeparatorStyle" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Margin" Value="14,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="{StaticResource outlineBrush}"/>
+         </Style>
+         <DataTemplate x:Key="optionTemplate">
+            <TextBlock Text="{Binding Caption}" TextTrimming="CharacterEllipsis"/>
+         </DataTemplate>
+         <DataTemplate x:Key="policyNameTemplate">
+            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+         </DataTemplate>
+         <!-- Field help shown on hover: wrapped so a long explanation stays a readable block. -->
+         <Style x:Key="helpToolTipStyle" TargetType="ToolTip">
+            <Setter Property="ContentTemplate">
+               <Setter.Value>
+                  <DataTemplate>
+                     <TextBlock Text="{Binding}" TextWrapping="Wrap" MaxWidth="340"/>
+                  </DataTemplate>
+               </Setter.Value>
+            </Setter>
+         </Style>
+      </ResourceDictionary>
+   </UserControl.Resources>
+   <Grid ClipToBounds="True" PreviewKeyDown="OnPreviewKeyDown">
+      <Grid>
+         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+         </Grid.RowDefinitions>
+
+         <!-- Bucket settings -->
+         <Border Margin="22,14,22,0" Style="{StaticResource cardStyle}" Padding="22,14,22,16">
+            <Border.Resources>
+               <Style TargetType="ToolTip" BasedOn="{StaticResource helpToolTipStyle}"/>
+            </Border.Resources>
+            <StackPanel>
+               <Grid>
+                  <TextBlock Text="BUCKET" Style="{StaticResource sectionCaptionStyle}" VerticalAlignment="Center"/>
+                  <Button Style="{StaticResource rowActionButtonStyle}" HorizontalAlignment="Right" Command="{Binding Commands[RefreshCommand]}" ToolTip="Reload" AutomationProperties.Name="Reload">
+                     <fa:FontAwesome Icon="Solid_ArrowsRotate" FontSize="13"/>
+                  </Button>
+               </Grid>
+               <Grid Margin="0,10,0,0" IsEnabled="{Binding CanEdit}">
+                  <Grid.ColumnDefinitions>
+                     <ColumnDefinition Width="2*"/>
+                     <ColumnDefinition Width="2*"/>
+                     <ColumnDefinition Width="1.3*"/>
+                     <ColumnDefinition Width="3*"/>
+                     <ColumnDefinition Width="Auto"/>
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="3-63 lowercase letters, digits, '-' and '.', starting and ending with a letter or digit. The name cannot change after the bucket is created.">
+                     <TextBlock Text="Name" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                     <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding BucketDraftName, UpdateSourceTrigger=PropertyChanged}" MaxLength="63" IsEnabled="{Binding IsNewBucket}" Tag="my-bucket" AutomationProperties.Name="Bucket name"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="1" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="The policy decides volumes, replicas, version retention, quotas and public access of the bucket. Only an active policy can be chosen for a new bucket or a change.">
+                     <TextBlock Text="Policy" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Policies}" SelectedItem="{Binding BucketDraftPolicy, Mode=TwoWay}" ItemTemplate="{StaticResource policyNameTemplate}" AutomationProperties.Name="Policy"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="Active: objects can be uploaded, deleted and restored. Read-only: objects can only be read and downloaded.">
+                     <TextBlock Text="State" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding BucketStates}" SelectedValuePath="Value" SelectedValue="{Binding BucketDraftState}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Bucket state"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="3" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="Free note for administrators, up to 500 characters.">
+                     <TextBlock Text="Note" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                     <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding BucketDraftNote, UpdateSourceTrigger=PropertyChanged}" MaxLength="500" AutomationProperties.Name="Note"/>
+                  </StackPanel>
+                  <Button Grid.Column="4" Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SaveBucketCommand]}" VerticalAlignment="Bottom">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_FloppyDisk" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Save" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+               </Grid>
+               <WrapPanel Margin="0,10,0,0" Visibility="{Binding IsBrowsing, Converter={StaticResource boolVisibility}}">
+                  <TextBlock Text="{Binding OpenBucket.Objects, StringFormat={}{0:N0} objects}" Style="{StaticResource fieldHelpStyle}" Margin="0,0,16,0"/>
+                  <TextBlock Style="{StaticResource fieldHelpStyle}" Margin="0,0,16,0">
+                     <Run Text="Size"/>
+                     <Run Text="{Binding OpenBucket.Bytes, Mode=OneWay, Converter={x:Static local:ObjectStorageManager.SizeConverter}}"/>
+                     <Run Text="of"/>
+                     <Run Text="{Binding OpenBucket.QuotaBytes, Mode=OneWay, Converter={x:Static local:ObjectStorageManager.LimitConverter}}"/>
+                  </TextBlock>
+                  <TextBlock Style="{StaticResource fieldHelpStyle}" Margin="0,0,16,0">
+                     <Run Text="Max object"/>
+                     <Run Text="{Binding OpenBucket.MaxObjectBytes, Mode=OneWay, Converter={x:Static local:ObjectStorageManager.LimitConverter}}"/>
+                  </TextBlock>
+                  <TextBlock Text="{Binding OpenBucket.Access, StringFormat=Access {0}}" Style="{StaticResource fieldHelpStyle}" Margin="0,0,8,0"/>
+                  <TextBlock Text="{Binding OpenBucket.PublicPath}" Style="{StaticResource fieldHelpStyle}" ToolTip="Objects of this bucket are public at this path of the API."/>
+               </WrapPanel>
+            </StackPanel>
+         </Border>
+
+         <!-- Object toolbar -->
+         <ScrollViewer Grid.Row="1" Margin="22,12,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Visibility="{Binding IsBrowsing, Converter={StaticResource boolVisibility}}">
+            <StackPanel Orientation="Horizontal">
+               <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[UploadCommand]}">
+                  <StackPanel Orientation="Horizontal">
+                     <fa:FontAwesome Icon="Solid_Upload" Style="{StaticResource buttonIconStyle}"/>
+                     <TextBlock Text="Upload" VerticalAlignment="Center"/>
+                  </StackPanel>
+               </Button>
+               <Border Style="{StaticResource storeSeparatorStyle}"/>
+               <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[DownloadCommand]}">
+                  <StackPanel Orientation="Horizontal">
+                     <fa:FontAwesome Icon="Solid_Download" Style="{StaticResource buttonIconStyle}"/>
+                     <TextBlock Text="Download" VerticalAlignment="Center"/>
+                  </StackPanel>
+               </Button>
+               <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[VersionsCommand]}" Margin="8,0,0,0">
+                  <StackPanel Orientation="Horizontal">
+                     <fa:FontAwesome Icon="Solid_ClockRotateLeft" Style="{StaticResource buttonIconStyle}"/>
+                     <TextBlock Text="Versions" VerticalAlignment="Center"/>
+                  </StackPanel>
+               </Button>
+               <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[DeleteObjectCommand]}" Margin="8,0,0,0">
+                  <StackPanel Orientation="Horizontal">
+                     <fa:FontAwesome Icon="Solid_TrashCan" Style="{StaticResource buttonIconStyle}"/>
+                     <TextBlock Text="Delete" VerticalAlignment="Center"/>
+                  </StackPanel>
+               </Button>
+            </StackPanel>
+         </ScrollViewer>
+
+         <!-- Path -->
+         <ItemsControl Grid.Row="2" Margin="22,0,22,10" ItemsSource="{Binding Crumbs}" Visibility="{Binding IsBrowsing, Converter={StaticResource boolVisibility}}">
+            <ItemsControl.ItemsPanel>
+               <ItemsPanelTemplate>
+                  <WrapPanel Orientation="Horizontal"/>
+               </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+               <DataTemplate>
+                  <StackPanel Orientation="Horizontal">
+                     <TextBlock Text="/" Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="2,0"/>
+                     <Button Style="{StaticResource textButtonStyle}" Content="{Binding Title}" ToolTip="{Binding Prefix}" AutomationProperties.Name="{Binding Title}"
+                             Command="{Binding DataContext.Commands[NavigateCrumbCommand], ElementName=bucketRoot}" CommandParameter="{Binding}"/>
+                  </StackPanel>
+               </DataTemplate>
+            </ItemsControl.ItemTemplate>
+         </ItemsControl>
+
+         <!-- Object browser -->
+         <Border Grid.Row="3" Margin="22,0,22,0" Style="{StaticResource cardStyle}" Padding="0" Visibility="{Binding IsBrowsing, Converter={StaticResource boolVisibility}}">
+            <Grid>
+               <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto"/>
+                  <RowDefinition Height="*"/>
+                  <RowDefinition Height="Auto"/>
+               </Grid.RowDefinitions>
+               <TextBlock Margin="22,12" Text="{Binding OpenBucket.Name, StringFormat=OBJECTS IN {0}}" Style="{StaticResource sectionCaptionStyle}" VerticalAlignment="Center"/>
+               <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <Grid MinWidth="760">
+                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                     </Grid.RowDefinitions>
+                     <Grid Margin="24,0,20,10">
+                        <Grid.ColumnDefinitions>
+                           <ColumnDefinition Width="30"/>
+                           <ColumnDefinition Width="300"/>
+                           <ColumnDefinition Width="100"/>
+                           <ColumnDefinition Width="70"/>
+                           <ColumnDefinition Width="160"/>
+                           <ColumnDefinition Width="100"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="1" Text="NAME" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="2" Text="SIZE" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="3" Text="VERSION" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="4" Text="MODIFIED" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="5" Text="TYPE" Style="{StaticResource sectionCaptionStyle}"/>
+                     </Grid>
+                     <ListBox x:Name="objectList" Grid.Row="1" ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource storeRowStyle}" BorderThickness="0" IsEnabled="{Binding CanBrowse}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AllowDrop="True" Drop="OnObjectsDrop" DragOver="OnObjectsDragOver" AutomationProperties.Name="Objects">
+                        <ListBox.ItemTemplate>
+                           <DataTemplate>
+                              <Grid>
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="30"/>
+                                    <ColumnDefinition Width="300"/>
+                                    <ColumnDefinition Width="100"/>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="160"/>
+                                    <ColumnDefinition Width="100"/>
+                                 </Grid.ColumnDefinitions>
+                                 <fa:FontAwesome Grid.Column="0" Icon="Solid_Folder" FontSize="13" VerticalAlignment="Center" Visibility="{Binding IsFolder, Converter={StaticResource boolVisibility}}"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding Name}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding SizeText}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="3" Text="{Binding VersionText}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="4" Text="{Binding ModifiedText}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="5" Text="{Binding Object.Mime}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Object.Mime}"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ListBox.ItemTemplate>
+                     </ListBox>
+                  </Grid>
+               </ScrollViewer>
+               <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="22,8,22,12">
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[LoadMoreCommand]}" Visibility="{Binding HasMore, Converter={StaticResource boolVisibility}}">
+                     <TextBlock Text="Load more"/>
+                  </Button>
+                  <TextBlock Text="Drop files here to upload them to this folder. Uploading an existing name adds a new version." Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/>
+               </StackPanel>
+            </Grid>
+         </Border>
+
+         <TextBlock Grid.Row="4" Text="{Binding Status}" Margin="22,8,22,14" Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+      </Grid>
+
+      <!-- Version side sheet -->
+      <Border Background="{StaticResource surfaceStrongBrush}" Visibility="{Binding IsVersionsOpen, Converter={StaticResource boolVisibility}}"/>
+      <Border Width="520" MaxWidth="{Binding ActualWidth, ElementName=bucketRoot}" HorizontalAlignment="Right" Background="{DynamicResource themeWindowBackgroundBrush}" BorderBrush="{StaticResource outlineBrush}" BorderThickness="1,0,0,0" Visibility="{Binding IsVersionsOpen, Converter={StaticResource boolVisibility}}">
+         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,8">
+            <StackPanel>
+               <Border Style="{StaticResource cardStyle}" Padding="22,16">
+                  <StackPanel IsEnabled="{Binding CanEdit}">
+                     <TextBlock Text="VERSIONS" Style="{StaticResource sectionCaptionStyle}"/>
+                     <TextBlock Text="{Binding VersionsKey}" Style="{StaticResource metaValueStyle}" Margin="0,6,0,10" TextWrapping="Wrap"/>
+                     <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[RestoreVersionCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_RotateLeft" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Restore" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[DownloadVersionCommand]}" Margin="8,0,0,0">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_Download" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Download" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource dangerOutlinedButtonStyle}" Command="{Binding Commands[PurgeVersionCommand]}" Margin="8,0,0,0">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_TrashCan" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Delete permanently" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                     </StackPanel>
+                     <ListBox ItemsSource="{Binding Versions}" SelectedItem="{Binding SelectedVersion, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource listRowCompactStyle}" BorderThickness="0" MaxHeight="420" AutomationProperties.Name="Versions">
+                        <ListBox.ItemTemplate>
+                           <DataTemplate>
+                              <Grid>
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="60"/>
+                                    <ColumnDefinition Width="140"/>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="70"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock Text="{Binding Version, StringFormat=v{0}}" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding Converter={x:Static local:ObjectStorageManager.VersionConverter}}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Mime}"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding CreatedAt, Converter={x:Static local:ObjectStorageManager.LocalTimeConverter}}" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="3" Text="current" Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Visibility="{Binding IsCurrent, Converter={StaticResource boolVisibility}}"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ListBox.ItemTemplate>
+                     </ListBox>
+                     <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[CloseEditorCommand]}" HorizontalAlignment="Left" Margin="0,16,0,0">
+                        <TextBlock Text="Close"/>
+                     </Button>
+                  </StackPanel>
+               </Border>
+               <TextBlock Text="{Binding Status}" Margin="22,10,22,16" Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap"/>
+            </StackPanel>
+         </ScrollViewer>
+      </Border>
+      <controls:WaitOverlay IsWaiting="{Binding InWaiting}" Caption="{Binding WaiterText}"/>
+   </Grid>
+</UserControl>
