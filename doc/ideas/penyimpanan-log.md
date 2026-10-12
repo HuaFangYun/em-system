@@ -108,6 +108,7 @@ Keputusan pengguna 2026-10-12:
    (lihat bagian "Database store log").
 7. **Satu request menyimpan ke dua database:** developer modul yang menentukan entry audit ditulis ke database
    mana (lihat bagian "Audit ke database mana").
+8. **Retensi harus bisa di-setup** (lihat bagian "Setup retensi").
 
 Rincian lain di catatan ini masih usulan.
 
@@ -1539,3 +1540,64 @@ Aturan engine:
 - `Use(ctx)` mengarahkan entry ke context tertentu; database itu harus sudah punya tabel audit (skrip/Prepare).
 - Konsistensi lintas dua database (satu berhasil, satu gagal) tetap tanggung jawab developer, sama seperti data
   modulnya sendiri; audit hanya mengikuti transaksi database yang dipilih.
+
+## Setup retensi (keputusan 2026-10-12)
+
+Keputusan pengguna: retensi tidak boleh hanya nilai bawaan di kode; **harus ada setup-nya**. Usulan bentuknya:
+
+### Tempat dan penyimpanan
+
+- Layar **Log Manager > Pengaturan > Retensi**, claim `Log Manager Settings`.
+- Disimpan di database (seperti pengaturan terkelola lain), **berlaku tanpa restart**: job retensi membaca
+  pengaturan terbaru setiap kali berjalan.
+- Setiap perubahan pengaturan retensi dicatat sebagai audit sistem `System.Settings / retention.changed`
+  (nilai lama dan baru).
+
+### Aturan yang bisa diatur
+
+| Cakupan | Satuan | Bawaan (usulan) | Batas bawah |
+|---|---|---|---|
+| Telemetry per level (Debug/Info, Warning, Error/Critical) | hari + batas ukuran total (GB) | 7 / 30 / 90 hari, 20 GB | 1 hari |
+| Log akses (request) | hari | 30 hari | 1 hari |
+| Trace | hari | 7 hari | 1 hari |
+| Error yang dikelompokkan (fingerprint) | hari sejak terakhir muncul | 180 hari | 30 hari |
+| Audit sistem per kelompok (`System.Auth`, `System.User`, ...) | bulan | 24 bulan | 12 bulan (ditetapkan engine) |
+| Audit modul per kelompok (`Invoice`, `Customer`, ...) | bulan atau "tidak pernah dihapus" | tidak pernah dihapus | batas dari registrasi modul |
+| Outbox lokal di database aplikasi (sudah terkirim ke pusat) | hari | lihat pertanyaan terbuka | 0 = hapus setelah terkirim |
+
+- Pada log server pusat, setiap aturan bisa **ditimpa per aplikasi** (mis. ERP A menyimpan error 1 tahun).
+- **Modul menetapkan batas bawah** di registrasi, karena modul yang tahu aturan hukum datanya:
+
+  ```csharp
+  builder.AddAudit("Invoice", a => a
+     .MinRetention(TimeSpan.FromDays(3653))      // 10 tahun, dokumen pembukuan
+     .Entry("created", "Membuat invoice") ...);
+  ```
+
+  Layar menolak nilai di bawah batas itu dan menampilkan alasannya.
+
+### Tindakan saat kedaluwarsa
+
+- **Hapus** (bawaan untuk telemetry).
+- **Arsipkan lalu hapus** (pilihan untuk audit): data diekspor ke file JSONL terkompresi per bulan, disimpan di
+  engine object storage (bucket arsip), baru dihapus dari database. Arsip bisa diunduh atau dimuat ulang ke
+  Log Manager untuk dibaca.
+
+### Job retensi
+
+- Berjalan harian pada jam yang diatur (mis. 02:00, di luar jam kerja), memakai runner background engine.
+- Menghapus per batch kecil (atau membuang partisi utuh bila provider mendukung), supaya tidak mengunci tabel.
+- Hasil setiap run dicatat sebagai audit sistem `System.Settings / retention.run`: jumlah baris dihapus/diarsip
+  per cakupan, durasi, dan error.
+- **Simulasi:** tombol "Pratinjau" menampilkan berapa baris yang akan dihapus dengan pengaturan sekarang, sebelum
+  disimpan.
+- **Legal hold:** kelompok audit, dokumen tertentu, atau user tertentu bisa dibekukan (tidak ikut dihapus) selama
+  pemeriksaan, dengan alasan; pemasangan dan pelepasannya juga diaudit.
+
+### Pertanyaan terbuka (retensi)
+
+1. Bawaan di tabel di atas sudah sesuai?
+2. Outbox lokal: hapus segera setelah terkirim (modul membaca riwayat lama dari pusat) atau disimpan sama lama
+   dengan pusat (modul selalu membaca lokal)?
+3. Arsip ke object storage dibutuhkan sejak awal, atau cukup hapus dulu?
+4. Legal hold dibutuhkan sejak awal?
