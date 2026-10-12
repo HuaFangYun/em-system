@@ -2,8 +2,9 @@
 
 Status: **belum dieksekusi**
 Dibuat: 2026-10-12, dipromosikan dari [doc/ideas/penyimpanan-log.md](../../doc/ideas/penyimpanan-log.md) atas
-permintaan pengguna. Sebagian pertanyaan di catatan ide belum dijawab; plan ini memakai usulan bawaan di §2.
-Usulan itu bisa diubah pengguna sebelum eksekusi. Yang paling berpengaruh pada rancangan ditandai **(cek)**.
+permintaan pengguna. Pertanyaan yang tersisa di catatan ide dijawab dengan usulan bawaan di §2; pengguna
+menerima semua usulan itu (2026-10-12), sehingga plan siap dieksekusi tanpa pertanyaan lanjutan. Butir yang paling
+berpengaruh pada rancangan tetap ditandai **(cek)** sebagai penanda.
 
 ---
 
