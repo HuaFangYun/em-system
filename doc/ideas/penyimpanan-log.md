@@ -109,6 +109,9 @@ Keputusan pengguna 2026-10-12:
 7. **Satu request menyimpan ke dua database:** developer modul yang menentukan entry audit ditulis ke database
    mana (lihat bagian "Audit ke database mana").
 8. **Retensi harus bisa di-setup** (lihat bagian "Setup retensi").
+9. **Topologi dasar = satu instalasi:** setiap `Em.Api` (mis. `osha.com/api`) adalah log server untuk dirinya dan
+   client-nya; log masuk lewat endpoint logger di API itu; database store diatur di Log Manager (internal atau
+   database lain). Lihat bagian "Contoh OSHA: satu instalasi".
 
 Rincian lain di catatan ini masih usulan.
 
@@ -1622,9 +1625,42 @@ Dampak ke rancangan, apa pun pilihannya:
 - C untuk audit tidak disarankan; bila dibutuhkan, cukup sebagai D (hanya telemetry).
 
 Usulan: mulai dari **A dan B**, siapkan amplop dan konfigurasi tujuan agar **D** bisa ditambahkan belakangan.
+Keputusan pengguna 2026-10-12: topologi dasar adalah A (satu instalasi), lihat "Contoh OSHA".
 
 Pertanyaan untuk pengguna:
 
 1. Aplikasi berbasis em-system dipasang **on-premise di pelanggan** atau **di-hosting oleh Anda**? Bila di-hosting
    Anda, B dan C hampir sama (server Anda juga).
 2. Apakah Anda (sebagai vendor) ingin melihat **error dan crash** aplikasi di semua pelanggan?
+
+### Contoh OSHA: satu instalasi (keputusan 2026-10-12)
+
+Penjelasan pengguna tentang "satu instalasi": OSHA memakai engine em-system dan menjalankan server di
+`osha.com/api`. Log masuk ke API itu sendiri (mis. `osha.com/api/logger/...`). Di Log Manager ada setup
+database untuk logger: **internal** berarti memakai database yang sama dengan data lain, dan bisa **diganti ke
+database lain**.
+
+```
+                        osha.com/api  (Em.Api OSHA + AddLogServer)
+                        +-------------------------------------------------+
+Client WPF/MAUI OSHA -->| /logger/v1/logs, /logger/v1/traces (telemetry)  |
+ (token user)           |                                                 |
+                        | ILogger API sendiri ----> langsung, tanpa HTTP  |--> Store log
+Aplikasi lain milik  -->| /logger/... (API key robot)                     |    internal = DB OSHA
+ OSHA (opsional)        |                                                 |    atau DB lain (Log Manager)
+                        | Audit modul OSHA ----> tabel audit di DB OSHA   |
+                        |                        (satu transaksi data)    |
+                        +-------------------------------------------------+
+Log Manager (WPF OSHA) --> action biasa di osha.com/api
+```
+
+- **Telemetry API itu sendiri** ditulis langsung ke store, tanpa lewat HTTP ke dirinya sendiri.
+- **Client WPF/MAUI** mengirim telemetry (error, crash) ke endpoint logger dengan token user yang sedang login.
+  Aplikasi lain milik OSHA bisa mengirim ke endpoint yang sama dengan API key robot. Dengan begitu pilihan "pusat
+  per pelanggan" (B) hanyalah kasus yang sama dengan lebih banyak pengirim.
+- **Audit** selalu ditulis di database data modul, dalam transaksi yang sama:
+  - store log **internal**: tabel audit itu sekaligus store audit; tidak ada penyalinan;
+  - store log **database lain**: telemetry langsung ke database lain itu, sedangkan audit tetap ditulis dulu di
+    database OSHA lalu disalin oleh shipper di dalam proses yang sama (tanpa HTTP) ke database log. Riwayat
+    dokumen untuk modul dibaca dari database OSHA.
+- Path endpoint mengikuti base path API (`osha.com/api/logger/...`); nama akhirnya ditentukan di plan.
