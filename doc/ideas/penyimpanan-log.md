@@ -1,8 +1,8 @@
 # Penyimpanan log engine
 
 - **Tanggal:** 2026-10-12
-- **Status:** diskusi; belum ada kode. Arah melebar menjadi log engine multi-app dengan telemetry ala Seq
-  (pengguna 2026-10-12), lihat bagian terakhir
+- **Status:** dipertimbangkan; belum ada kode. Arah (pengguna 2026-10-12): satu log engine terpusat untuk
+  audit data dan telemetry sistem; lihat "Keputusan yang sudah jelas" dan bagian "Audit data dan telemetry terpusat"
 - **Plan turunan:** belum ada
 - **Catatan terkait:** [user-editor-activity.md](user-editor-activity.md) (butuh jejak siapa mengubah akun),
   [registry-purge-gc.md](registry-purge-gc.md) (audit hapus image), [stream-dua-arah.md](stream-dua-arah.md)
@@ -94,7 +94,14 @@ database.
 
 ## Keputusan yang sudah jelas
 
-Belum ada; semua di atas masih usulan.
+Keputusan pengguna 2026-10-12:
+
+1. Dibangun **log engine** yang mendukung **audit data** (perubahan data entitas, termasuk riwayat dokumen
+   ERP) dan **telemetry sistem**.
+2. Semua log **terpusat**: banyak aplikasi mengirim ke satu log server dan bisa dicari di satu tempat.
+3. Log bisa **ditarik oleh modul** (API baca dan feed perubahan, lihat bagian "Log bisa ditarik oleh modul").
+
+Rincian lain di catatan ini masih usulan.
 
 ## Pertanyaan terbuka
 
@@ -392,3 +399,100 @@ dan sejenisnya), sehingga aturan hak baca berlaku sama di client dan di server.
 3. Bolehkah modul membaca riwayat jenis dokumen milik modul lain, dengan syarat dideklarasikan?
 4. Perlukah modul juga bisa membaca **telemetry** (mis. error milik modul invoice) untuk ditampilkan di layar
    modul, atau telemetry tetap khusus admin?
+
+## Audit data dan telemetry terpusat (usulan 2026-10-12)
+
+Keputusan pengguna: log engine mendukung **audit data** dan **telemetry sistem**, dan semuanya **terpusat**.
+Bagian ini menyatukan usulan sebelumnya menjadi satu arsitektur.
+
+### Audit data sebagai inti, riwayat dokumen di atasnya
+
+- **Audit data** = catatan perubahan baris entitas apa pun yang didaftarkan (opt-in): master (customer, item,
+  harga) maupun transaksi. Isinya: entitas, kunci, operasi (insert/update/delete), diff field (nilai lama/baru
+  + teks tampilan), pelaku, `actingAs`, waktu, `requestId`, alasan.
+- Perubahan dalam satu transaksi dikumpulkan menjadi satu **change set**. Simpan invoice yang mengubah header
+  dan tiga baris tercatat sebagai satu change set, bukan empat kejadian lepas.
+- **Riwayat dokumen** (jenis 11) adalah lapisan di atas audit data: change set dikelompokkan menurut dokumen
+  induknya (`docType` + kunci), lalu ditambah kejadian bisnis (post, void, cetak, approval).
+- Dengan begitu pertanyaan "master data perlu riwayat?" terjawab oleh mekanisme yang sama: cukup daftarkan
+  entitasnya.
+
+### Masalah: transaksional vs terpusat
+
+Audit harus ditulis dalam transaksi yang sama dengan perubahan datanya. Log server pusat ada di mesin lain
+dan bisa mati atau tidak terjangkau. Menulis langsung ke server pusat berarti salah satu dari dua hal buruk:
+penyimpanan data gagal karena log server mati, atau audit hilang.
+
+Usulan: **pola outbox**.
+
+```
+App (mis. ERP)                                             Log server pusat
+  SaveChanges ----+--> tabel data                            /ingest/audit   (idempoten per id kejadian)
+                  +--> tabel audit lokal (transaksi sama)    /v1/logs, /v1/traces (OTLP telemetry)
+  ILogger/Activity --> buffer disk lokal                         |
+                                                                 +--> store audit   (append-only, retensi panjang)
+  Shipper background: kirim audit lokal (urut Seq)  ------>      +--> store telemetry (retensi pendek)
+                      + telemetry dari buffer        ------>     +--> query, tail live, alert, Log Viewer
+```
+
+1. Audit ditulis ke **tabel audit lokal di database aplikasi**, di transaksi yang sama. Ini sumber kebenaran.
+2. **Shipper** di background mengirim audit lokal ke log server pusat berurutan menurut `Seq`, dengan retry.
+   Server menerima secara idempoten (id kejadian unik), jadi kiriman ganda tidak menggandakan data.
+3. Telemetry lewat jalur terpisah (buffer disk lokal, OTLP), boleh hilang sebagian.
+4. Bila log server pusat mati, aplikasi tetap jalan normal; audit menumpuk di outbox lokal dan terkirim saat
+   server kembali.
+
+Akibatnya:
+
+- **Modul membaca audit dari database lokal** (cepat, konsisten dengan data, tetap jalan saat pusat mati).
+- **Pencarian lintas aplikasi** (audit + telemetry dari semua app) dilakukan di log server pusat.
+- Satu `traceId`/`requestId` menyambungkan audit dan telemetry: dari satu change set bisa dibuka trace dan
+  log diagnostik request yang membuatnya, dan sebaliknya.
+
+### Cara menangkap perubahan data
+
+| Cara | Kelebihan | Kekurangan |
+|---|---|---|
+| **Interceptor EF Core** (`SaveChanges` + `ChangeTracker`) | Tahu pelaku, request, alasan; bisa menyimpan teks tampilan; mengelompokkan per dokumen | Tidak melihat perubahan lewat SQL langsung/stored procedure |
+| **Trigger SQL Server** + `SESSION_CONTEXT` (engine mengisi user/request saat koneksi dibuka) | Menangkap semua perubahan, termasuk SQL langsung | Tanpa teks tampilan dan kejadian bisnis; trigger per tabel perlu digenerate dan dirawat; beban tulis lebih berat |
+| Temporal table / CDC | Bawaan SQL Server | Tanpa "siapa dan kenapa"; sulit dirangkai per dokumen |
+
+Usulan: **interceptor EF Core sebagai jalur utama**; trigger + `SESSION_CONTEXT` hanya untuk tabel yang memang
+ditulis di luar EF Core, dan menulis ke tabel audit yang sama. `Em.Api.Core` sudah memakai interceptor EF
+Core (`ApprovalDatabaseSwitch`), jadi polanya sudah ada.
+
+### Bentuk penyimpanan audit (usulan awal)
+
+- `ChangeSet`: `Seq` (naik terus), id unik, waktu UTC, app, user, `actingAs`, alamat, `requestId`, `traceId`,
+  alasan, status kirim ke pusat.
+- `Change`: change set, entitas, kunci, operasi, `docType` + kunci induk (bila bagian dokumen), diff JSON
+  (field, lama, baru, teks tampilan lama/baru).
+- `DocumentEvent`: kejadian bisnis (post, void, cetak, approval, linked, comment), merujuk ke change set bila
+  ada.
+- Append-only: akun database aplikasi idealnya hanya punya hak INSERT/SELECT pada tabel ini. Opsional hash
+  berantai antar change set sebagai bukti tidak diubah.
+
+### Log server pusat
+
+- Modul engine di `Em.Api.Core` yang bisa dijalankan sebagai host tersendiri (mis. "Em Log Server") atau
+  menumpang di `Em.Api` yang sudah ada.
+- Dua store dengan aturan berbeda: **audit** (append-only, retensi panjang, tidak di-sampling) dan
+  **telemetry** (retensi pendek, boleh sampling).
+- Pengirim memakai API key per aplikasi (mekanisme robot/token yang sudah ada); setiap event bertanda
+  app/instance/tenant.
+- Telemetry tetap OTLP, jadi bagian telemetry bisa juga diarahkan ke Seq bila diperlukan. Audit tidak dikirim
+  ke Seq, karena Seq tidak dirancang sebagai arsip catatan bisnis 10 tahun.
+
+### Pertanyaan terbuka (audit data terpusat)
+
+1. **Topologi pusat:** satu log server untuk semua aplikasi dan semua pelanggan, atau satu per instalasi
+   pelanggan? Bila semua pelanggan: data audit bisnis pelanggan keluar dari servernya (perlu persetujuan dan
+   pemisahan tenant).
+2. **Salinan lokal:** audit di database aplikasi disimpan selamanya (modul tetap bisa membaca riwayat 10
+   tahun) atau dipangkas setelah terkirim ke pusat (modul membaca riwayat lama dari pusat)?
+3. **Penangkapan:** setuju interceptor EF Core sebagai jalur utama? Ada tabel ERP yang ditulis lewat stored
+   procedure?
+4. **Entitas yang diaudit:** opt-in per entitas (usulan) atau semua tabel otomatis dengan daftar pengecualian?
+5. **Tahap pertama:** usulan urutan: (a) audit data lokal + API baca modul, (b) riwayat dokumen + control
+   "Riwayat", (c) SDK telemetry + log server pusat (ingest, store, Log Viewer), (d) shipper audit ke pusat,
+   (e) trace, alert, metrik.
