@@ -1867,3 +1867,48 @@ proses. Usulan: multi store sebagai dasar; alat pindah data menyusul bila dibutu
 1. Setuju model daftar store (satu tulis + beberapa baca)?
 2. Pemisahan store tulis per jenis (audit vs telemetry) perlu sejak awal, atau cukup satu store tulis dulu?
 3. Alat pindah data perlu di tahap awal?
+
+### Kontrak untuk control activity di UI (2026-10-12)
+
+Penegasan pengguna: intinya di UI bisa dibuat control yang me-render activity, dengan tombol **Load more** untuk
+memuat halaman berikutnya. Multi database tidak boleh terlihat oleh control.
+
+Revisi kecil pada bagian "Mengambil activity": karena satu halaman bisa berasal dari beberapa store, posisi
+halaman memakai **cursor teks yang tidak perlu dipahami client** (berisi posisi per store), bukan `beforeSeq`.
+
+```csharp
+Task<AuditActivityPage> GetMeta_AuditActivity_ByDoc(string docType, string docKey, string? cursor, int take);
+Task<AuditActivityPage> GetMeta_AuditActivity_ByType(string docType, DateTime? from, DateTime? to,
+   string? userId, string? kinds, string? cursor, int take);
+
+public sealed class AuditActivityPage
+{
+   public AuditActivity[] Items { get; set; } = [];
+   public string? NextCursor { get; set; }   // null = tidak ada halaman berikutnya
+}
+```
+
+Yang perlu dilakukan control:
+
+```csharp
+private string? _cursor;
+public bool HasMore => _cursor is not null;              // tombol Load more tampil bila true
+
+public async Task LoadFirstAsync() {
+   var page = await _audit.GetMeta_AuditActivity_ByDoc(DocType, DocKey, cursor: null, take: 20);
+   Items.ReplaceWith(page.Items);
+   _cursor = page.NextCursor;
+}
+
+public async Task LoadMoreAsync() {                      // tombol Load more
+   var page = await _audit.GetMeta_AuditActivity_ByDoc(DocType, DocKey, _cursor, take: 20);
+   Items.AddRange(page.Items);
+   _cursor = page.NextCursor;
+}
+```
+
+- Control cukup tahu `DocType` dan `DocKey` (atau filter untuk `ByType`); dari store mana data berasal, urutan
+  gabungan, dan store yang tidak bisa dihubungi diurus server.
+- Bila sebagian store tidak tersedia, halaman membawa peringatan (mis. `Warnings`) yang bisa ditampilkan control
+  sebagai satu baris info.
+- Item yang sama tidak muncul dua kali di halaman berbeda, karena cursor menyimpan posisi terakhir per store.
