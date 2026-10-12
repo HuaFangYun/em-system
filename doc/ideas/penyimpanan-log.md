@@ -1601,3 +1601,30 @@ Keputusan pengguna: retensi tidak boleh hanya nilai bawaan di kode; **harus ada 
    dengan pusat (modul selalu membaca lokal)?
 3. Arsip ke object storage dibutuhkan sejak awal, atau cukup hapus dulu?
 4. Legal hold dibutuhkan sejak awal?
+
+## Penjelasan: pilihan topologi log server (2026-10-12)
+
+Pertanyaan yang masih terbuka: log server "pusat" itu pusat bagi siapa. Kodenya sama untuk semua pilihan
+(`Em.Api` + `AddLogServer()`); yang berbeda adalah siapa yang menjalankannya dan data siapa yang masuk.
+
+| Pilihan | Susunan | Kelebihan | Kekurangan |
+|---|---|---|---|
+| **A. Satu instalasi** | `Em.Api` aplikasi sekaligus log server; tanpa pengiriman jaringan | Paling sederhana, tidak ada server tambahan | Tiap aplikasi punya log sendiri; tidak bisa mencari lintas aplikasi |
+| **B. Pusat per pelanggan** | Satu `Em.Api` log server di jaringan pelanggan; semua aplikasi pelanggan itu (ERP, OshaApp, client WPF) mengirim ke sana | Satu tempat cari untuk satu organisasi; data tetap di pelanggan | Pelanggan menjalankan satu server tambahan |
+| **C. Pusat bersama milik vendor** | Semua pelanggan mengirim ke satu log server milik Anda | Anda melihat error semua pelanggan dan semua versi | Audit bisnis pelanggan (invoice, harga, data user) keluar dari server mereka: perlu persetujuan/kontrak dan kepatuhan pelindungan data pribadi (UU 27/2022 tentang PDP; verifikasi ke sumber resmi); perlu pemisahan tenant yang ketat; server Anda menjadi titik beban |
+| **D. Campuran** | Audit tetap di A atau B milik pelanggan; hanya telemetry (error, crash, versi) yang juga diteruskan ke log server vendor, setelah data pribadi dibuang | Anda tetap bisa memantau error dan rilis; data bisnis tidak keluar | Pengirim harus mendukung tujuan berbeda per jenis log dan penyaringan data pribadi |
+
+Dampak ke rancangan, apa pun pilihannya:
+
+- A dan B kodenya identik; B hanya A dengan host khusus. Pindah dari A ke B cukup lewat konfigurasi.
+- Agar D tetap mungkin nanti tanpa mengubah format: amplop event membawa `tenant` sejak awal, dan pengirim
+  mendukung **tujuan per jenis log** (audit ke satu alamat, telemetry ke satu atau beberapa alamat).
+- C untuk audit tidak disarankan; bila dibutuhkan, cukup sebagai D (hanya telemetry).
+
+Usulan: mulai dari **A dan B**, siapkan amplop dan konfigurasi tujuan agar **D** bisa ditambahkan belakangan.
+
+Pertanyaan untuk pengguna:
+
+1. Aplikasi berbasis em-system dipasang **on-premise di pelanggan** atau **di-hosting oleh Anda**? Bila di-hosting
+   Anda, B dan C hampir sama (server Anda juga).
+2. Apakah Anda (sebagai vendor) ingin melihat **error dan crash** aplikasi di semua pelanggan?
