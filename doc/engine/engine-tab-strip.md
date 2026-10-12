@@ -18,7 +18,7 @@ Merge `Em.Ui.Wpf.Core/Styles/MaterialDesign.xaml` for menu styles. The strip's d
 | Property | Default | Purpose |
 | --- | --- | --- |
 | `TitlePath` | `Title` | Item binding path for text and tooltip; updates with property notifications |
-| `CloseCommand` | null | Command for the close button and middle click; parameter is the item |
+| `CloseCommand` | null | Command for the close button and middle click; parameter is the item. When null the close button is not shown (fixed tabs) |
 | `CanReorder` | true | Enables mouse dragging |
 | `MinItemWidth` | 130 | Minimum width used to shrink long tabs before scrolling |
 | `LeadingContent` | null | Optional content to the left of the scrolling region; null reserves no space |

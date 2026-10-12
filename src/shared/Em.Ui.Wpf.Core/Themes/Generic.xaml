@@ -624,6 +624,10 @@
                                             <Trigger Property="IsEnabled" Value="False">
                                                 <Setter Property="Opacity" Value="0.4" />
                                             </Trigger>
+                                            <!-- A strip without CloseCommand has fixed tabs: no close button at all. -->
+                                            <DataTrigger Binding="{Binding CloseCommand, RelativeSource={RelativeSource AncestorType={x:Type controls:EmTabStrip}}}" Value="{x:Null}">
+                                                <Setter TargetName="closeButton" Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
                                 </Setter.Value>
