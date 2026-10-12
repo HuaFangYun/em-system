@@ -710,3 +710,106 @@ Aturan keamanan:
 3. Ketiga provider wajib didukung sejak tahap pertama, atau mulai MSSQL dulu lalu MySQL/PostgreSQL menyusul?
 4. Audit lokal (outbox) di aplikasi pengirim mengikuti provider database aplikasi itu. Apakah aplikasi ERP juga
    akan berjalan di MySQL/PostgreSQL, sehingga skrip outbox juga perlu tiga provider?
+
+## Cara kerja 1: log operasional server (diskusi 2026-10-12)
+
+Pengguna mulai membahas cara kerja satu per satu. Yang pertama: menyimpan log operasional **seperti yang
+sekarang tampil di console server**, misalnya koneksi API masuk.
+
+### Yang tampil sekarang
+
+Semua lewat `ILogger`, ditulis `AddSimpleConsole` satu baris per entri (`EmApp.BuildApp`):
+
+```
+08:15:02 info: Em.Api.Request[0] #0001A IN     POST Invoice/Save from 10.0.0.5
+08:15:02 info: Em.Api.Request[0] #0001A START  POST Invoice/Save from 10.0.0.5 as budi (U001)
+08:15:02 info: Em.Api.Request[0] #0001A DONE   POST Invoice/Save from 10.0.0.5 as budi (U001) - 200 in 41.3 ms (total 43.0 ms)
+08:15:09 warn: Em.Api.Request[0] #0001B REJECT GET  Robot/List from 10.0.0.9 as anonymous - 401 ... after 0.4 ms
+08:16:00 fail: Em.Api.Core.ObjectStorage...[0] ...exception...
+```
+
+Sumbernya: `RequestTrace` (kategori `Em.Api.Request`: IN, START, DONE, ABORT, REJECT), `ServicesBase.Logger`
+milik modul, service background engine, serta ASP.NET Core dan EF Core.
+
+`RequestTrace` sudah memakai **message template** (`#{Id} DONE {Method} {Route} ... {StatusCode} in
+{Elapsed} ms`). Artinya setiap nilai (`Method`, `Route`, `Caller`, `User`, `StatusCode`, `Elapsed`, `Total`)
+sudah tersedia sebagai properti terpisah, bukan hanya teks. Itu yang membuat log bisa disimpan terstruktur
+tanpa mengubah cara penulisan.
+
+### Alur yang diusulkan
+
+```
+ILogger.Log(...)  (kode tidak berubah)
+   |-- Console provider (tetap, tampilan sama seperti sekarang)
+   +-- EmLog provider (baru)
+         1. ubah jadi event: waktu UTC, level, kategori, template, pesan jadi, properti, exception, scope
+         2. tambah identitas: app, instance, versi, environment
+         3. masuk antrean memori (Channel, berbatas) -- tidak pernah memblokir atau melempar exception
+                |
+         Writer background (per 1 detik atau per 500 event)
+         4. tulis batch ke segmen file di disk lokal (./data/logs/outbox/*.jsonl)
+                |
+         Sender
+         5a. log server di Em.Api ini sendiri  -> bulk insert ke store log (database)
+         5b. log server pusat                  -> kirim OTLP/HTTP ke log server
+         6. segmen dihapus setelah berhasil; gagal -> coba lagi nanti
+```
+
+- **Satu jalur untuk dua topologi:** memori -> segmen disk -> sink. Sink-nya database lokal atau HTTP ke pusat.
+  Bila store/log server mati, event aman di disk dan dikirim begitu tersambung lagi.
+- **Tidak mengganggu request:** provider hanya memasukkan ke antrean. Bila antrean penuh, event level rendah
+  (Debug/Information) dibuang lebih dulu, Warning ke atas dipertahankan. Jumlah yang dibuang dicatat sebagai
+  satu event peringatan ("1.250 event dibuang karena antrean penuh").
+- **Batas disk:** segmen outbox punya batas total (mis. 500 MB). Bila terlampaui, segmen terlama dibuang, juga
+  dicatat.
+
+### Contoh event tersimpan (baris DONE)
+
+```json
+{
+  "time": "2026-10-12T01:15:02.481Z", "level": "Information", "category": "Em.Api.Request",
+  "template": "#{Id} DONE   {Method} {Route} from {Caller} as {User} - {StatusCode} in {Elapsed:0.0} ms (total {Total:0.0} ms)",
+  "message": "#0001A DONE   POST Invoice/Save from 10.0.0.5 as budi (U001) - 200 in 41.3 ms (total 43.0 ms)",
+  "props": { "Id": "0001A", "Method": "POST", "Route": "Invoice/Save", "Caller": "10.0.0.5",
+             "User": "budi (U001)", "StatusCode": 200, "Elapsed": 41.3, "Total": 43.0 },
+  "app": "ErpApi", "instance": "srv-app-01", "version": "1.4.0", "env": "prod",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736", "requestId": "srv-app-01:0001A", "userId": "U001"
+}
+```
+
+Log Manager tab **Log** menampilkan kolom `message` persis seperti console. Dengan properti, filter seperti
+"status >= 500", "Elapsed > 1000 ms", "route Invoice/*", atau "semua baris request #0001A" bisa dilakukan.
+
+### Penyesuaian kecil di engine (usulan)
+
+1. **Id request yang unik.** `#0001A` adalah penghitung pendek yang mulai lagi dari 0 setiap restart dan
+   berulang setelah 0xFFFFF. Console tetap menampilkan id pendek; event menyimpan juga `requestId` yang unik
+   (instance + waktu start + id, atau `traceId`).
+2. **Scope per request.** `RequestTrace` membuka `ILogger.BeginScope` berisi `requestId`, `traceId`, dan user,
+   sehingga log modul di dalam request itu (mis. `Logger.LogWarning` di service invoice) ikut membawa id yang
+   sama dan bisa dirangkai dengan baris IN/DONE.
+3. **User sebagai properti terpisah.** Saat ini `User` berupa teks gabungan (`budi (U001) [debug:...]`).
+   Tambahkan properti `UserId`, `Account`, `DebugKey`, `Impersonating` agar bisa difilter tanpa mengurai teks.
+4. **Log saat startup.** `EmAppBuilder` memakai logger bootstrap sendiri yang hanya menulis ke console. Log itu
+   juga perlu masuk ke segmen disk (atau ditahan di memori sampai provider siap), karena error konfigurasi saat
+   start justru paling sering dicari.
+
+### Level dan filter
+
+- Memakai mekanisme standar `Logging:LogLevel` di `appsettings.json` yang sudah ada, ditambah bagian khusus
+  provider (`Logging:EmLog:LogLevel`). Contoh: console tetap `Information`, store juga `Information` tetapi
+  `Microsoft.EntityFrameworkCore` hanya `Warning`.
+- Bawaan: Debug/Trace tidak disimpan.
+- Nanti: level bisa diubah dari Log Manager tanpa restart (pertanyaan terbuka).
+
+### Pertanyaan terbuka (log operasional)
+
+1. **IN/START/DONE disimpan semua** (tiga baris per request, sama persis dengan console), atau hanya baris akhir
+   (DONE/ABORT/REJECT) yang sudah berisi semua informasinya? Menyimpan semua melipatkan tiga volume; IN tetap
+   berguna untuk request yang menggantung tanpa DONE.
+2. Endpoint mentah (registry container, NuPak, CDN, nanti penerima OTLP) saat ini tidak lewat `RequestTrace`.
+   Perlu ikut dicatat sebagai log akses?
+3. Retensi bawaan log operasional: 14 hari?
+4. Perlu mengubah level log dari Log Manager tanpa restart?
+5. Selain database/log server, perlu juga file log harian yang bisa dibuka langsung di server (tanpa Log
+   Manager), atau segmen outbox sudah cukup?
