@@ -945,3 +945,99 @@ banyak modul membutuhkan panel yang sama, baru dipertimbangkan control engine be
 2. Nama field yang tampil: nama kolom (`nQty`) atau label yang dideklarasikan modul (`Qty`)? Usulan: modul
    memberi label lewat registrasi atau atribut `[Display]`.
 3. Field total hasil hitungan (`nTotal`) ikut dicatat, atau hanya field yang diinput user?
+
+### 5. Mengambil activity: satu invoice dan semua invoice (asumsi)
+
+Mengikuti pola engine approval: kontrak di `Em.Libs` (seperti `IApprovalServices`), client WPF/MAUI di
+`Api.Core` (seperti `ApprovalService`), kunci dokumen dikirim sebagai kunci kanonik string (seperti
+`GetMeta_ApprovalRequestsByDoc(docType, docKey)`). Parameter GET berupa nilai sederhana per field, bukan objek
+filter (lihat [get-parameter-per-field.md](get-parameter-per-field.md)).
+
+```csharp
+// Em.Libs (asumsi)
+public interface IAuditServices
+{
+   // Satu dokumen, menurut kunci
+   Task<AuditActivityPage> GetMeta_AuditActivity_ByDoc(string docType, string docKey, long? beforeSeq, int take);
+
+   // Satu dokumen, menurut nomor dokumen (INV/2026/10/0012)
+   Task<AuditActivityPage> GetMeta_AuditActivity_ByDocNo(string docType, string docNo, long? beforeSeq, int take);
+
+   // Semua dokumen satu jenis (semua invoice), dengan filter opsional
+   Task<AuditActivityPage> GetMeta_AuditActivity_ByType(string docType, DateTime? from, DateTime? to,
+      string? userId, string? kinds, long? beforeSeq, int take);
+
+   // Yang lebih baru dari Seq tertentu (refresh flyout tanpa memuat ulang semua); docKey null = semua dokumen
+   Task<AuditActivity[]> GetMeta_AuditActivity_Since(string docType, string? docKey, long afterSeq);
+}
+
+public sealed class AuditActivityPage
+{
+   public AuditActivity[] Items { get; set; } = [];
+   public long? NextBeforeSeq { get; set; }        // null = sudah habis
+}
+
+public sealed class AuditActivity
+{
+   public long Seq { get; set; }
+   public DateTime Time { get; set; }              // UTC
+   public string UserId { get; set; } = "";
+   public string Account { get; set; } = "";
+   public string? ActingAs { get; set; }
+   public string Kind { get; set; } = "";          // created, updated, posted, voided, output, approval, ...
+   public string DocType { get; set; } = "";
+   public string DocKey { get; set; } = "";        // kunci kanonik, untuk membuka editor
+   public string DocNo { get; set; } = "";
+   public string Summary { get; set; } = "";       // "Mengubah 3 field, menambah 1 baris"
+   public string? Reason { get; set; }
+   public AuditFieldChange[] Changes { get; set; } = [];
+}
+
+public sealed class AuditFieldChange
+{
+   public string Row { get; set; } = "";           // "" = header, "Baris 2 - Kertas A4 80gr"
+   public string Field { get; set; } = "";         // label: "Qty"
+   public string? Old { get; set; }                // teks tampilan
+   public string? New { get; set; }
+   public string Op { get; set; } = "update";      // insert/update/delete (baris)
+}
+```
+
+- **Paging pakai `Seq`, bukan nomor halaman.** "Muat lagi" mengirim `beforeSeq = NextBeforeSeq`. Kejadian baru
+  yang masuk saat pengguna menggulir tidak menggeser halaman.
+- **Nomor dokumen:** engine mencari kunci dari `DocNo` yang tersimpan. Bila satu nomor dipakai lebih dari satu
+  dokumen (mis. nomor dipakai ulang setelah dihapus), action menolak dan meminta kunci.
+- **Hak:** `ByDoc`/`ByDocNo` dicek dengan `CanRead` jenis dokumen. `ByType` juga, ditambah filter baris
+  opsional dari registrasi (mis. `.ReadFilter(...)` per cabang) supaya pengguna tidak melihat aktivitas invoice
+  cabang lain.
+- **Indeks** (store audit): (`DocType`, `DocKey`, `Seq` desc), (`DocType`, `Seq` desc), (`DocType`, `DocNo`).
+
+Pemakaian di VM Invoice Editor (flyout satu invoice):
+
+```csharp
+public async Task OpenActivityAsync() {
+   var key = AuditKey.Of(new InvoiceKey(Invoice.cInvoiceId));          // kunci kanonik
+   var page = await _audit.GetMeta_AuditActivity_ByDoc("Invoice", key, beforeSeq: null, take: 30);
+   Activities.ReplaceWith(page.Items);
+   _nextBefore = page.NextBeforeSeq;
+   IsActivityOpen = true;
+}
+
+public async Task LoadMoreAsync() {                                    // gulir ke bawah
+   if (_nextBefore is null) return;
+   var page = await _audit.GetMeta_AuditActivity_ByDoc("Invoice", _key, _nextBefore, 30);
+   Activities.AddRange(page.Items);
+   _nextBefore = page.NextBeforeSeq;
+}
+
+public async Task RefreshActivityAsync() {                             // setelah Save/Post
+   var newer = await _audit.GetMeta_AuditActivity_Since("Invoice", _key, Activities.FirstOrDefault()?.Seq ?? 0);
+   Activities.InsertRange(0, newer);
+}
+```
+
+Flyout semua invoice (mis. di layar daftar invoice) sama, hanya memanggil `ByType("Invoice", ...)`; setiap item
+membawa `DocNo` untuk ditampilkan dan `DocKey` untuk membuka Invoice Editor saat diklik.
+
+Kode server modul (mis. laporan) memakai pembaca yang sama tanpa HTTP, mis. `IAuditReader` lewat DI, dengan
+method yang sama tanpa prefix `GetMeta_`.
