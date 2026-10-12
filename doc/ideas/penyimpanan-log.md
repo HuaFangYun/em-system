@@ -1159,3 +1159,19 @@ Kejadian lain untuk tab ini:
 3. Tab Activity menggabungkan audit data dan log keamanan (sign-in), atau dipisah menjadi dua tab?
 4. Perubahan role dan claim role (`ta_Role`, `ta_RoleClaim`) juga diaudit sebagai kelompok `Role` tersendiri?
    Perubahan claim sebuah role memengaruhi semua user pemegang role itu.
+
+### Kunci kelompok audit (`UserKey`, `InvoiceKey`)
+
+`UserKey`/`InvoiceKey` di contoh adalah **asumsi**, belum ada di kode. Bentuknya sama dengan kunci dokumen engine
+approval (`TestDocKey` di modul Em.Test): `record` biasa yang bagian-bagiannya ditandai `[KeyPart(n)]`.
+
+```csharp
+public record UserKey([property: KeyPart(1)] string UserId);
+public record InvoiceKey([property: KeyPart(1)] string InvoiceId);
+public record StockMoveKey([property: KeyPart(1)] string WarehouseId, [property: KeyPart(2)] DateTime Date);  // kunci gabungan
+```
+
+Engine mengubahnya ke bentuk kanonik string lewat konverter yang sudah ada (`ApprovalKey.ToCanonical`: daftar
+nilai berurutan dalam JSON, mis. `["U014"]`) untuk disimpan dan diindeks, lalu mengembalikannya ke record saat
+dibaca. Untuk log engine, `KeyPartAttribute` dan konverternya dipindah atau dibagi dari namespace approval agar
+dipakai bersama, sehingga kunci approval dan kunci audit untuk dokumen yang sama selalu identik.
