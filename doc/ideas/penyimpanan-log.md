@@ -1452,3 +1452,60 @@ Editor bisa menampilkan "apa yang dilakukan budi" maupun "apa yang dilakukan ter
 3. Batas minimal retensi audit sistem: 1 tahun?
 4. Perlu alert bawaan untuk kejadian sistem tertentu (mis. impersonasi debug token di production, sign-in gagal
    beruntun, admin direset) dikirim lewat SMTP?
+
+### Login, logout, dan sesi (rincian `System.Auth`, 2026-10-12)
+
+Pengguna menegaskan bahwa audit sistem yang dimaksud terutama **login, logout, dan sejenisnya**. Titik catat di
+kode yang ada:
+
+| Kejadian | Titik di engine | Cara tulis |
+|---|---|---|
+| `signin.success` | `PostGetMeta_SignIn` / `SignInAdminAsync` -> `Tokens.IssueAsync` | `WriteNowAsync` |
+| `signin.failed` (akun tidak ada, status tidak aktif, password salah) | `PostGetMeta_SignIn`, sebelum `throw ActionException(401)` | `WriteNowAsync` (request gagal, tidak ada `SaveChanges`) |
+| `signout` | `PostMeta_SignOut` -> `Tokens.RevokeAsync(sessionId)` | ikut transaksi revoke |
+| `signout.all` | `PostMeta_SignOutAll` -> `Tokens.RevokeAllAsync(userId)` | ikut transaksi revoke |
+| `session.revoked` (sebab: password diubah sendiri, direset admin) | `PostMeta_ChangeMyPassword`, `PostMeta_ResetPassword` -> `RevokeAllAsync` | ikut transaksi |
+| `session.expired` | Tidak ada request saat sesi kedaluwarsa; dicatat saat refresh ditolak karena kedaluwarsa, atau oleh job pembersih sesi | `WriteNowAsync`, pelaku `system` |
+| `token.refreshed` | `PostGetMeta_RefreshToken` | **bukan audit** (terlalu sering); cukup telemetry |
+
+Usulan penempatan: pencatatan sesi (`signin.success`, `signout`, `session.*`) ditaruh **di dalam service `Tokens`**,
+bukan di setiap action. Semua jalur yang membuat atau mencabut sesi lewat `Tokens`, jadi tidak ada jalur yang
+terlewat bila nanti ada cara login baru (mis. SSO). Hanya `signin.failed` yang dicatat di action sign-in, karena
+kegagalan terjadi sebelum `Tokens` dipanggil.
+
+**Id sesi masuk amplop.** Setiap event (audit dan telemetry) membawa `sessionId`. Dengan itu Log Manager bisa
+menjawab "apa saja yang dilakukan budi selama sesi ini": dari login, invoice yang dibuat, sampai logout.
+
+Contoh isi:
+
+```json
+{ "seq": 3301, "group": "System.Auth", "kind": "signin.success", "time": "2026-10-12T00:58:03Z",
+  "actor": { "type": "user", "userId": "U014", "account": "budi" },
+  "target": { "type": "user", "id": "U014" },
+  "sessionId": "S-7F3A", "address": "10.0.0.5", "app": "ErpWpf 1.4.0",
+  "detail": { "method": "password", "sessionExpiry": "2026-10-19T00:58:03Z" } }
+
+{ "seq": 3302, "group": "System.Auth", "kind": "signin.failed", "time": "2026-10-12T01:02:47Z",
+  "actor": { "type": "anonymous" },
+  "detail": { "accountTried": "budi", "reason": "password" }, "address": "10.0.0.77" }
+
+{ "seq": 3388, "group": "System.Auth", "kind": "signout", "time": "2026-10-12T09:31:10Z",
+  "actor": { "type": "user", "userId": "U014", "account": "budi" },
+  "target": { "type": "user", "id": "U014" }, "sessionId": "S-7F3A", "address": "10.0.0.5" }
+
+{ "seq": 3402, "group": "System.Auth", "kind": "session.revoked", "time": "2026-10-12T10:05:00Z",
+  "actor": { "type": "user", "userId": "U000", "account": "aan" },
+  "target": { "type": "user", "id": "U014" }, "reason": "password.reset.byAdmin",
+  "detail": { "sessions": 2 } }
+```
+
+Catatan:
+
+- Alasan gagal (`reason`: akun tidak ada / status tidak aktif / password salah) **hanya ada di audit** untuk admin.
+  Jawaban ke client tetap "Incorrect username or password." seperti sekarang, agar tidak membocorkan akun mana
+  yang ada.
+- `accountTried` dicatat sebagai teks; bila akun memang ada, event juga ditautkan ke user itu sebagai target
+  sehingga tampil di Activity user tersebut ("3 percobaan login gagal").
+- Password yang dicoba tidak pernah dicatat.
+- Client WPF: saat `SessionEnded` terjadi (token kedaluwarsa/ditolak), client tidak perlu melapor; server yang
+  mencatat penyebabnya.
