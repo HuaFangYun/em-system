@@ -813,3 +813,135 @@ Log Manager tab **Log** menampilkan kolom `message` persis seperti console. Deng
 4. Perlu mengubah level log dari Log Manager tanpa restart?
 5. Selain database/log server, perlu juga file log harian yang bisa dibuka langsung di server (tanpa Log
    Manager), atau segmen outbox sudah cukup?
+
+## Cara kerja 2: audit di modul Invoice (contoh asumsi, 2026-10-12)
+
+Semua nama di bagian ini (`ta_Invoice`, `AddDocumentAudit`, `Audit.Event`, action `GetMeta_AuditActivity`)
+adalah **asumsi untuk diskusi**, bukan API yang sudah ada. Pengguna: tidak membuat control baru untuk ini.
+
+### 1. Registrasi di modul (sekali, saat startup)
+
+```csharp
+builder.AddDocumentAudit<InvoiceKey>("Invoice", doc => doc
+   .Root<ta_Invoice>(r => new InvoiceKey(r.cInvoiceId), docNo: r => r.cInvoiceNo)
+   .Lines<ta_InvoiceLine>("Lines", l => new InvoiceKey(l.cInvoiceId), lineKey: l => l.nLineNo)
+   .Display<ta_Invoice>(r => r.cCustomerId,
+      (db, id) => db.ta_Customers.Where(c => c.cCustomerId == id).Select(c => c.cCustomerName))
+   .Display<ta_InvoiceLine>(l => l.cItemId,
+      (db, id) => db.ta_Items.Where(i => i.cItemId == id).Select(i => i.cItemName))
+   .Ignore("ustamp", "datestamp", "json_object")
+   .CanRead(c => c.HasClaim(InvoiceClaims.View)));
+```
+
+- `Root`/`Lines`: entitas mana yang termasuk dokumen invoice dan bagaimana barisnya dikaitkan ke induk.
+- `Display`: teks tampilan disimpan bersama id (customer `C001` = "PT Maju Jaya" saat itu).
+- `Ignore`: kolom teknis tidak dicatat.
+- `CanRead`: siapa yang boleh membaca riwayatnya (sama dengan hak membuka invoice).
+
+### 2. Di service: edit biasa tidak perlu kode tambahan
+
+```csharp
+[PostAction(claim: InvoiceClaims.Edit)]
+public async Task PostInvoice_Save(InvoiceSaveDto data) {
+   // ... validasi, ctx.UpdateRow(header), tambah/ubah/hapus baris seperti biasa ...
+   await ctx.SaveChangesAsync();   // interceptor menulis audit dalam transaksi yang sama
+}
+
+[PostAction(claim: InvoiceClaims.Post)]
+public async Task PostInvoice_Post(string cInvoiceId) {
+   var inv = await ctx.ta_Invoices.SingleAsync(r => r.cInvoiceId == cInvoiceId, AbortToken);
+   inv.cInvoiceStatus = InvoiceStatus.Posted;
+   Audit.Event("Invoice", new InvoiceKey(cInvoiceId), "posted");          // kejadian bisnis
+   await ctx.SaveChangesAsync();                                          // perubahan status + event: satu transaksi
+}
+
+[PostAction(claim: InvoiceClaims.Void)]
+public async Task PostInvoice_Void(string cInvoiceId, string reason) {
+   // ... set status Void ...
+   Audit.Event("Invoice", new InvoiceKey(cInvoiceId), "voided", reason: reason);   // alasan wajib
+   await ctx.SaveChangesAsync();
+}
+```
+
+`Audit.Event` hanya menitipkan kejadian; penulisannya ikut `SaveChanges` berikutnya, jadi bila simpan gagal,
+kejadiannya juga tidak tercatat. Langkah approval ditulis otomatis oleh engine approval.
+
+### 3. Contoh isi tersimpan
+
+Skenario: Budi membuat INV/2026/10/0012 (2 baris). Sari mengganti customer, mengubah qty baris 2, dan menambah
+baris 3. Andi mem-post dan mencetak.
+
+**ChangeSet**
+
+| Seq | Waktu (UTC) | User | Request | Alasan |
+|---|---|---|---|---|
+| 1041 | 2026-10-12 01:15:02 | U001 budi | srv-app-01:0001A | |
+| 1057 | 2026-10-12 02:40:18 | U007 sari | srv-app-01:0003F | |
+| 1063 | 2026-10-12 03:05:44 | U003 andi | srv-app-01:00052 | |
+
+**Change**
+
+| Seq | Entitas | Kunci | Operasi | Dokumen |
+|---|---|---|---|---|
+| 1041 | ta_Invoice | INV-0012 | insert | Invoice INV-0012 (INV/2026/10/0012) |
+| 1041 | ta_InvoiceLine | INV-0012 / 1 | insert | sama |
+| 1041 | ta_InvoiceLine | INV-0012 / 2 | insert | sama |
+| 1057 | ta_Invoice | INV-0012 | update | sama |
+| 1057 | ta_InvoiceLine | INV-0012 / 2 | update | sama |
+| 1057 | ta_InvoiceLine | INV-0012 / 3 | insert | sama |
+| 1063 | ta_Invoice | INV-0012 | update | sama |
+
+Diff (kolom JSON) untuk change set 1057:
+
+```json
+[
+  { "entity": "ta_Invoice", "key": "INV-0012", "op": "update", "fields": [
+      { "f": "cCustomerId", "old": "C001", "new": "C014",
+        "oldText": "PT Maju Jaya", "newText": "CV Sinar Abadi" },
+      { "f": "nTotal", "old": 12500000, "new": 13750000 } ] },
+  { "entity": "ta_InvoiceLine", "key": "INV-0012/2", "op": "update", "fields": [
+      { "f": "nQty", "old": 10, "new": 12, "rowText": "Baris 2 - Kertas A4 80gr" } ] },
+  { "entity": "ta_InvoiceLine", "key": "INV-0012/3", "op": "insert", "fields": [
+      { "f": "cItemId", "new": "IT-220", "newText": "Tinta Printer Hitam" },
+      { "f": "nQty", "new": 2 }, { "f": "nPrice", "new": 375000 } ] }
+]
+```
+
+**DocumentEvent**
+
+| Seq | Kejadian | User | Detail |
+|---|---|---|---|
+| 1041 | created | budi | snapshot awal |
+| 1063 | posted | andi | status Draft -> Posted, snapshot |
+| 1064 | output | andi | print, cetakan ke-1, snapshot |
+
+### 4. Membaca untuk flyout "Aktivitas" di Invoice Editor
+
+Action engine (asumsi): `GetMeta_AuditActivity(docType, docKey, page)`. Hak dicek lewat `CanRead`. Hasilnya
+sudah diringkas untuk tampilan:
+
+```json
+[
+  { "time": "2026-10-12T03:06:10Z", "user": "andi", "kind": "output",  "summary": "Mencetak (cetakan ke-1)" },
+  { "time": "2026-10-12T03:05:44Z", "user": "andi", "kind": "posted",  "summary": "Mem-post invoice" },
+  { "time": "2026-10-12T02:40:18Z", "user": "sari", "kind": "updated", "summary": "Mengubah 3 field, menambah 1 baris",
+    "changes": [ "Customer: PT Maju Jaya -> CV Sinar Abadi",
+                 "Total: 12.500.000 -> 13.750.000",
+                 "Baris 2 Kertas A4 80gr, Qty: 10 -> 12",
+                 "Baris 3 ditambah: Tinta Printer Hitam, Qty 2 x 375.000" ] },
+  { "time": "2026-10-12T01:15:02Z", "user": "budi", "kind": "created", "summary": "Membuat invoice INV/2026/10/0012" }
+]
+```
+
+Di Invoice Editor cukup elemen WPF standar, tanpa control baru: tombol "Aktivitas" di toolbar yang membuka
+panel kanan (kolom Grid yang visibility-nya terikat ke `Vm.IsActivityOpen`, atau `Popup`), berisi
+`ItemsControl` dengan `ItemTemplate` (waktu, user, ringkasan, daftar perubahan). Saat panel dibuka, VM
+memanggil action di atas dengan kunci invoice yang sedang dibuka, dan memuat ulang setelah Save/Post. Bila
+banyak modul membutuhkan panel yang sama, baru dipertimbangkan control engine bersama.
+
+### Pertanyaan terbuka (audit modul)
+
+1. Teks ringkasan ("Mengubah 3 field") dibuat server (satu bahasa, seragam) atau client (bisa dilokalkan)?
+2. Nama field yang tampil: nama kolom (`nQty`) atau label yang dideklarasikan modul (`Qty`)? Usulan: modul
+   memberi label lewat registrasi atau atribut `[Display]`.
+3. Field total hasil hitungan (`nTotal`) ikut dicatat, atau hanya field yang diinput user?
