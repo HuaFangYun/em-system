@@ -326,3 +326,69 @@ dan pengarsipan ke storage lain dibahas terpisah bila volumenya besar.
 3. Cetak ulang: perlu dicatat setiap kali dan ditandai "cetakan ke-n / copy"?
 4. Satu tabel riwayat untuk semua jenis dokumen (dipartisi), atau tabel per modul?
 5. Apakah user boleh menulis komentar bebas di riwayat, atau riwayat murni otomatis?
+
+## Log bisa ditarik oleh modul (usulan 2026-10-12)
+
+Permintaan pengguna: log engine bisa **dibaca (ditarik) oleh modul**. Contohnya modul invoice mengambil dari
+log untuk melihat pergerakan datanya. Log jadi sumber data untuk modul, bukan hanya untuk dibaca admin.
+
+### Batas: yang boleh dipakai logika bisnis
+
+- **Hanya keluarga catatan** (riwayat dokumen, audit, keamanan, proses/job, komunikasi keluar) yang boleh
+  dibaca modul untuk logika atau laporan bisnis. Isinya lengkap dan transaksional, jadi hasilnya bisa dipercaya.
+- **Telemetry** (diagnostik, akses, trace) boleh hilang dan di-sampling, jadi **tidak boleh** menjadi dasar
+  logika bisnis. Modul hanya boleh membacanya untuk tampilan diagnosis, dengan hak admin.
+- Log bersifat **append-only**. Modul membaca dan menambah lewat API engine, tidak pernah mengubah atau
+  menghapus baris log.
+
+### API baca untuk modul (server)
+
+Disediakan engine di `Em.Api.Core` dan tersedia dari service modul (mis. lewat `ServicesBase`):
+
+| Kebutuhan | Bentuk (usulan) |
+|---|---|
+| Riwayat satu dokumen | `History.For("Invoice", key)`: daftar kejadian berurutan beserta diff |
+| Isi dokumen pada suatu waktu | `History.VersionAt("Invoice", key, waktu)`: snapshot terdekat + diff sesudahnya, bisa dibaca sebagai type modul (`Invoice`) |
+| Jejak satu field | `History.FieldTimeline("Invoice", key, "Lines[2].Qty")`: perubahan qty/harga dari waktu ke waktu |
+| Lintas dokumen | `History.Query(filter)`: jenis dokumen, rentang waktu, kejadian, user, field yang berubah. Contoh: semua invoice yang di-void bulan ini, semua perubahan harga oleh user X |
+| Rantai dokumen | `History.Chain("Invoice", key)`: dokumen asal dan turunan dari kejadian `linked` (SO -> DO -> Invoice -> Payment) |
+| Feed perubahan | `History.Since(cursor, filter)`: kejadian sesudah nomor urut tertentu, untuk modul yang memproses perubahan secara berkala |
+
+Hasil umum berbentuk generik (field, nilai lama/baru, teks tampilan). Engine menyediakan helper untuk
+membaca snapshot dan diff sebagai type milik modul.
+
+### Feed perubahan (cursor)
+
+- Setiap kejadian catatan mendapat **nomor urut global yang naik terus** (`Seq`).
+- Modul menyimpan cursor terakhirnya, lalu meminta "kejadian sesudah `Seq` N" untuk jenis dokumen/kejadian
+  tertentu. Contoh pemakaian: modul akuntansi menarik invoice yang baru di-post untuk dibuat jurnalnya,
+  modul laporan memperbarui ringkasan, integrasi mengirim ke sistem lain.
+- Semantik: **at-least-once**. Pemroses harus idempoten (memakai `Seq` atau id kejadian sebagai kunci
+  pemrosesan).
+- Kursor disimpan engine per konsumen (nama konsumen didaftarkan modul), supaya pemrosesan bisa dilanjutkan
+  setelah restart. Pemanggilan bisa dijadwal lewat runner background yang sudah ada, dan nanti didorong
+  lewat stream dua arah tanpa mengubah kontraknya.
+- Kejadian yang belum lewat batas retensi bisa diproses ulang dengan memundurkan cursor.
+
+### Hak baca
+
+- **Atas nama user** (dipanggil dari action): hasil disaring dengan hak user itu. User yang tidak boleh
+  membuka invoice tidak mendapat riwayat invoice, termasuk lewat query lintas dokumen.
+- **Atas nama sistem** (job background, feed): modul mendeklarasikan jenis dokumen yang dibacanya saat
+  registrasi. Mis. modul akuntansi mendeklarasikan baca `Invoice` dan `Payment`. Membaca jenis dokumen yang
+  tidak dideklarasikan ditolak engine, supaya ketergantungan antarmodul terlihat jelas di kode.
+
+### Client
+
+Control "Riwayat" di WPF dan layar laporan modul memakai action engine yang sama (`GetMeta_DocumentHistory`
+dan sejenisnya), sehingga aturan hak baca berlaku sama di client dan di server.
+
+### Pertanyaan terbuka (log ditarik modul)
+
+1. "Pergerakan data" yang dimaksud lebih ke **riwayat perubahan satu dokumen**, **rantai dokumen**
+   (SO -> DO -> Invoice), atau **pergerakan nilai** (mis. stok/saldo dari waktu ke waktu)? Yang terakhir
+   biasanya lebih tepat sebagai tabel mutasi/ledger milik modul, bukan dibaca dari log.
+2. Apakah feed perubahan (cursor) dibutuhkan sekarang, atau cukup query riwayat dulu?
+3. Bolehkah modul membaca riwayat jenis dokumen milik modul lain, dengan syarat dideklarasikan?
+4. Perlukah modul juga bisa membaca **telemetry** (mis. error milik modul invoice) untuk ditampilkan di layar
+   modul, atau telemetry tetap khusus admin?
