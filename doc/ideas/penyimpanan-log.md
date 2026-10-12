@@ -496,3 +496,67 @@ Core (`ApprovalDatabaseSwitch`), jadi polanya sudah ada.
 5. **Tahap pertama:** usulan urutan: (a) audit data lokal + API baca modul, (b) riwayat dokumen + control
    "Riwayat", (c) SDK telemetry + log server pusat (ingest, store, Log Viewer), (d) shipper audit ke pusat,
    (e) trace, alert, metrik.
+
+## Log Manager (usulan 2026-10-12)
+
+Permintaan pengguna: ada **Log Manager** yang bisa membaca semua data log, dari dokumen yang diaudit sampai
+telemetry seperti error. Bentuknya mengikuti manager engine yang sudah ada (Object Storage Manager, NuGet
+Manager): navigasi admin (mis. `admin.logmanager`, Administrative Tools) dengan tab `EmTabStrip`, dan editor
+yang terbuka di tab baru untuk satu objek (seperti bucket editor).
+
+### Sumber data
+
+- Log Manager membaca dari **log server pusat**: semua aplikasi, audit dan telemetry di satu tempat. Pemilih
+  **aplikasi/instance/environment** ada di bagian atas dan berlaku untuk semua tab.
+- Audit di pusat bisa tertinggal dari database aplikasi selama shipper belum mengirim. Log Manager menampilkan
+  posisi terakhir yang diterima per aplikasi dan tanda "tertunda" bila tertinggal.
+- Control "Riwayat" di layar dokumen modul tetap membaca dari database lokal aplikasi (lihat bagian sebelumnya).
+
+### Tab
+
+| Tab | Isi |
+|---|---|
+| **Ringkasan** | Per aplikasi: jumlah error 24 jam terakhir, error baru, volume audit, antrean shipper yang belum terkirim, status ingest. Klik angka membuka tab terkait dengan filter terisi |
+| **Audit data** | Cari perubahan: aplikasi, entitas/`docType`, kunci atau `docNo`, user, operasi, field, rentang waktu. Tabel change set; detail menampilkan diff (lama -> baru, dengan teks tampilan) per entitas dalam change set itu |
+| **Dokumen** | Cari dokumen lalu buka **editor riwayat dokumen** di tab baru: timeline kejadian, diff per kejadian, "isi pada waktu itu", rantai dokumen (SO -> DO -> Invoice -> Payment) |
+| **Error** | Error dikelompokkan per fingerprint: jumlah, pertama/terakhir terlihat, aplikasi, versi, jumlah user terdampak. Status masalah: baru, diketahui, selesai, diabaikan (error yang muncul lagi setelah "selesai" kembali menjadi baru). Detail: stack trace, contoh kejadian, environment |
+| **Log** | Penjelajah semua event telemetry: level, kategori, teks, properti, rentang waktu. Mode **tail live**. Query tersimpan |
+| **Trace** | Satu `traceId` sebagai waterfall: klik di client -> action API -> query DB, dengan durasi (tahap belakangan) |
+| **Keamanan** | Login gagal/berhasil, lockout, token ditolak, impersonasi debug token |
+| **Pengaturan** | Aplikasi pengirim dan API key-nya, retensi per aplikasi dan per jenis log, aturan alert (mis. error baru, lebih dari N error per 5 menit -> email lewat engine SMTP), konsumen feed perubahan beserta posisi cursor-nya |
+
+### Saling tertaut
+
+Semua event membawa `traceId`/`requestId`, jadi setiap tampilan bisa melompat ke yang lain:
+
+- Dari **change set audit** -> "Lihat request": log, error, dan trace request yang membuat perubahan itu.
+- Dari **error** -> "Lihat request": log di sekitarnya, user, layar/action yang dipanggil. Catatan: bila error
+  membatalkan transaksi, tidak ada audit untuk request itu (datanya memang tidak berubah). Log Manager
+  menampilkannya sebagai "transaksi dibatalkan", bukan "tidak ada data".
+- Dari **dokumen** -> setiap kejadian di timeline bisa dibuka ke request-nya.
+- Dari **user** -> semua audit dan error milik user itu dalam rentang waktu.
+
+### Hak akses (usulan)
+
+Isi audit adalah data bisnis (harga, nilai invoice), sedangkan error adalah data teknis. Pembacanya sering
+berbeda (staf IT vs auditor/finance), jadi hak dipisah:
+
+| Claim | Mengizinkan |
+|---|---|
+| `Log Manager Access` | Membuka Log Manager |
+| `Log Telemetry Read` | Tab Ringkasan (bagian teknis), Error, Log, Trace |
+| `Log Audit Read` | Tab Audit data dan Dokumen |
+| `Log Security Read` | Tab Keamanan |
+| `Log Manager Settings` | Tab Pengaturan: API key, retensi, alert, cursor |
+
+Hak bisa dibatasi per aplikasi (mis. auditor hanya melihat audit aplikasi ERP A). Field yang dideklarasikan
+rahasia tetap tampil sebagai "diubah" tanpa nilai, juga untuk admin.
+
+### Pertanyaan terbuka (Log Manager)
+
+1. Log Manager menjadi bagian aplikasi WPF yang sudah ada (menu admin, terhubung ke log server pusat), atau
+   aplikasi tersendiri khusus log server?
+2. Pembagian hak di atas sudah cukup, atau perlu pembatasan audit per jenis dokumen di Log Manager pusat juga?
+   Hak per dokumen ada di masing-masing aplikasi, sedangkan pusat tidak mengenal role aplikasi itu.
+3. Perlukah ekspor (CSV/Excel/PDF) dari tab Audit dan Dokumen untuk kebutuhan auditor?
+4. Status masalah di tab Error: cukup status, atau perlu penugasan ke orang dan catatan penanganan?
