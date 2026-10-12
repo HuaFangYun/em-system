@@ -176,3 +176,73 @@ App (Em.Api / WPF / MAUI / app lain)        Log server (modul Em.Api.Core)      
 5. **Cakupan telemetry:** log saja, log + trace, atau juga metrics?
 6. **Log client WPF ke server:** dikirim otomatis (dengan buffer offline) atau hanya atas persetujuan
    pengguna? Ada pertimbangan privasi (nama user, nama mesin, isi pesan).
+
+## Definisi jenis log (usulan 2026-10-12)
+
+Permintaan pengguna: definisikan jenis log dulu sebelum membahas penyimpanan dan server. Jenis dibedakan
+menurut **tujuan dan pembacanya**, bukan menurut level. Level (Trace, Debug, Information, Warning, Error,
+Critical) adalah atribut di dalam setiap jenis.
+
+### Dua keluarga
+
+- **Telemetry**: boleh hilang sebagian (sampling, buffer penuh, server mati), dikirim asinkron lewat pipeline
+  log engine (OTLP), retensi pendek. Dipakai untuk mendiagnosis sistem.
+- **Catatan (record)**: tidak boleh hilang, ditulis dalam transaksi yang sama dengan perubahan datanya, disimpan
+  di database aplikasi, retensi panjang. Dipakai sebagai bukti dan riwayat.
+
+Pemisahan ini menentukan jalurnya: telemetry tidak pernah menjadi satu-satunya tempat catatan, dan catatan
+tidak dikirim lewat pipeline yang boleh membuang data. Catatan boleh **disalin** ke telemetry untuk dicari
+bersama, tetapi sumber kebenarannya tetap di database.
+
+### Daftar jenis
+
+| # | Jenis | Keluarga | Contoh | Penulis | Skema | Pembaca | Retensi (usulan) |
+|---|---|---|---|---|---|---|---|
+| 1 | **Diagnostik** (log aplikasi) | Telemetry | "Cache bucket X dimuat ulang", warning modul | Otomatis, `ILogger` | Bebas: message template + properti | Developer, ops | 7-30 hari |
+| 2 | **Error / crash** | Telemetry | Exception tak tertangani, crash client WPF | Otomatis, handler engine | Diagnostik + stack, versi, OS, layar aktif, fingerprint untuk pengelompokan | Developer | 30-90 hari |
+| 3 | **Akses** (request) | Telemetry | IN/START/DONE dari `RequestTrace`: route, pemanggil, status, durasi | Otomatis, engine | Tetap | Ops, keamanan | 30-90 hari |
+| 4 | **Trace** (span) | Telemetry | Klik di WPF -> action `Em.Api` -> query DB, dengan durasi tiap langkah | Otomatis, `Activity` | Tetap (OTel span) | Developer | 7-14 hari |
+| 5 | **Metrik** | Telemetry | Jumlah request/menit, latensi p95, ukuran antrean | Otomatis + modul | Agregat angka | Ops, alert | Ringkasan panjang |
+| 6 | **Keamanan** | Catatan | Login gagal/berhasil, lockout, token ditolak, impersonasi debug token, akses ditolak | Eksplisit, engine | Tetap | Admin, keamanan | 1 tahun+ |
+| 7 | **Audit** | Catatan | Ubah role/hak user, hapus image registry, ubah kebijakan bucket | Eksplisit, engine + modul | Tetap: pelaku, aksi, target, nilai lama/baru | Admin, auditor | 1 tahun+ / tak terbatas |
+| 8 | **Proses / job** | Catatan | Output satu run publish, maintenance object storage, task bisnis | Eksplisit, runner | Per run: status, mulai/selesai, baris output | Pengguna yang menjalankan, admin | Per jumlah run / 90 hari |
+| 9 | **Komunikasi keluar** | Catatan | Email terkirim/gagal (SMTP), webhook/HTTP ke pihak luar | Eksplisit, engine | Tetap: tujuan, subjek, status, percobaan | Admin, support | 90 hari-1 tahun |
+| 10 | **Aktivitas pengguna** (opsional) | Telemetry | Buka layar, pakai fitur | Otomatis, navigasi UI | Tetap | Produk | 30-90 hari |
+
+Catatan per jenis:
+
+- **2 vs 1:** error tetap event diagnostik level Error/Critical, tetapi diperlakukan khusus: tidak di-sampling,
+  diberi fingerprint (jenis exception + frame teratas) agar error yang sama terhitung satu masalah, dan bisa
+  memicu alert.
+- **3 vs 6:** akses mencatat semua request apa adanya (boleh hilang); keamanan hanya kejadian yang relevan dan
+  wajib tersimpan. Request yang ditolak gate muncul di keduanya.
+- **6 vs 7:** keduanya catatan; bisa satu tabel dengan kolom `Kind` (security/audit) atau dua tabel. Keamanan
+  sering tanpa target data (login gagal belum punya user), audit selalu punya target.
+- **8:** inilah "log" yang dilihat pengguna akhir (mis. jendela output publish). Terikat pada id run, bukan aliran
+  global; baris diagnostik selama run boleh disalin ke telemetry dengan `runId` sebagai properti.
+- **10:** menyentuh privasi pengguna; hanya bila ada kebutuhan produk yang jelas.
+
+### Amplop bersama (semua jenis)
+
+Setiap event, apa pun jenisnya, membawa bidang yang sama agar bisa dicari bersama:
+
+- **Kapan:** `timestamp` (UTC).
+- **Dari mana:** `app` (ApplicationName host), `appVersion`, `instance` (mesin/container), `environment`
+  (dev/staging/prod), `tenant` (bila server log dipakai banyak pelanggan).
+- **Apa:** `kind` (jenis di atas), `level`, `category` (logger/modul), `messageTemplate`, `message` (sudah
+  dirender), `properties` (JSON), `exception` (bila ada).
+- **Rangkaian:** `traceId`, `spanId`, `requestId` (id `RequestTrace`), `runId` (jenis 8).
+- **Siapa:** `userId`, `account`, `actingAs` (impersonasi), `clientAddress`.
+
+Aturan data rahasia berlaku untuk semua jenis: password, token, API key, connection string, dan isi body
+request tidak pernah masuk event; nilai lama/baru di audit untuk field rahasia ditulis sebagai "diubah" saja.
+
+### Pertanyaan terbuka (jenis log)
+
+1. Apakah sepuluh jenis ini lengkap, atau ada jenis yang dibutuhkan aplikasi turunan (OshaApp, EmPorium)
+   yang belum tercakup?
+2. Jenis mana yang masuk **tahap pertama**? Usulan: 1, 2, 3 (telemetry dasar) + 6, 7 (sudah ada kebutuhan
+   nyata: impersonasi dan perubahan user).
+3. Keamanan dan audit: satu tabel dengan `Kind` atau dua tabel?
+4. Aktivitas pengguna (10): masuk cakupan atau dibuang?
+5. Apakah metrik (5) bagian dari engine ini, atau diserahkan ke Prometheus/OTel collector?
