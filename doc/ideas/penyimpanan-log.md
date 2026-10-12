@@ -100,6 +100,9 @@ Keputusan pengguna 2026-10-12:
    ERP) dan **telemetry sistem**.
 2. Semua log **terpusat**: banyak aplikasi mengirim ke satu log server dan bisa dicari di satu tempat.
 3. Log bisa **ditarik oleh modul** (API baca dan feed perubahan, lihat bagian "Log bisa ditarik oleh modul").
+4. Ada **Log Manager** untuk membaca audit dokumen sampai telemetry seperti error (lihat bagian "Log Manager").
+5. **Log server adalah engine `Em.Api` yang dijalankan** dengan fitur log server dinyalakan, bukan produk
+   atau proses terpisah (lihat bagian "Log server = Em.Api").
 
 Rincian lain di catatan ini masih usulan.
 
@@ -560,3 +563,52 @@ rahasia tetap tampil sebagai "diubah" tanpa nilai, juga untuk admin.
    Hak per dokumen ada di masing-masing aplikasi, sedangkan pusat tidak mengenal role aplikasi itu.
 3. Perlukah ekspor (CSV/Excel/PDF) dari tab Audit dan Dokumen untuk kebutuhan auditor?
 4. Status masalah di tab Error: cukup status, atau perlu penugasan ke orang dan catatan penanganan?
+
+## Log server = Em.Api (keputusan 2026-10-12)
+
+Keputusan pengguna: log server memakai **engine API yang dijalankan**, yaitu host `Em.Api` biasa dengan fitur
+log server dinyalakan. Tidak ada produk atau proses log server tersendiri.
+
+### Bentuk
+
+- Fitur didaftarkan seperti fitur engine lain di `Program.cs` host, mis. `builder.AddLogServer()`, dan bisa
+  dimatikan lewat `"modules": { "logServer": false }` di `emapi-config.json` (pola yang sama dengan
+  `objectStorage`).
+- Sisi pengirim juga fitur engine: `builder.AddLogShipping(...)` di `Em.Api` (audit lokal + telemetry ke
+  server log) dan pemasangan setara di host WPF/MAUI untuk telemetry client.
+- Yang dipakai ulang dari engine: autentikasi robot/token untuk aplikasi pengirim, claim untuk hak Log
+  Manager, `emapi-config.json`, runner background (retensi, alert), engine SMTP (email alert), stream dua arah
+  (tail live, nanti), dan object storage (calon arsip segmen lama).
+- Endpoint penerima OTLP (`/v1/logs`, `/v1/traces`) adalah endpoint HTTP mentah, bukan action, mengikuti pola
+  endpoint registry dan NuPak yang sudah ada. Penerima audit (`/ingest/audit`) dan query Log Manager memakai
+  action biasa.
+- **Log Manager** adalah navigasi di aplikasi WPF yang sudah ada dan terhubung ke `Em.Api` yang menyalakan log
+  server, seperti manager lain (menjawab pertanyaan terbuka Log Manager nomor 1).
+
+### Topologi yang didukung kode yang sama
+
+| Topologi | Susunan |
+|---|---|
+| **Satu instalasi** | `Em.Api` aplikasi juga menyalakan log server. Audit dan telemetry miliknya ditulis langsung ke store lokal, tanpa lewat HTTP |
+| **Log server pusat** | Satu `Em.Api` khusus yang hanya menyalakan log server (tanpa modul bisnis). Beberapa `Em.Api` aplikasi dan client WPF mengirim ke sana |
+
+Pindah dari topologi pertama ke kedua cukup lewat konfigurasi (alamat log server dan API key), tanpa ubah
+kode modul.
+
+### Hal yang perlu dijaga
+
+- **Tidak boleh memakan ekornya sendiri:** log yang dihasilkan saat menerima log (request trace endpoint
+  ingest, error ingest) ditulis langsung ke store lokal, tidak dikirim lewat HTTP ke dirinya sendiri, dan
+  request trace endpoint ingest diturunkan ke level Debug supaya tidak membanjiri.
+- **Database terpisah untuk store log:** volume telemetry dan audit jauh lebih besar daripada data inti.
+  Usulan: connection string tersendiri di `emapi-config.json` (bawaan: database inti, cocok untuk instalasi
+  kecil). Audit **lokal** milik aplikasi (outbox) tetap di database aplikasi karena harus satu transaksi
+  dengan datanya.
+- **Satu instance:** seperti object storage, tahap awal mengasumsikan satu instance log server per store.
+- **Log server mati** tidak boleh mengganggu aplikasi pengirim: pengirim hanya menumpuk di outbox/buffer.
+
+### Pertanyaan terbuka (log server = Em.Api)
+
+1. Store log memakai database terpisah (usulan) atau cukup database inti?
+2. Pada log server pusat, siapa yang login ke Log Manager: akun di `Em.Api` log server itu sendiri (terpisah dari
+   akun aplikasi), atau perlu login tunggal dengan aplikasi asal?
