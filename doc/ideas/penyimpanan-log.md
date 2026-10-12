@@ -103,6 +103,9 @@ Keputusan pengguna 2026-10-12:
 4. Ada **Log Manager** untuk membaca audit dokumen sampai telemetry seperti error (lihat bagian "Log Manager").
 5. **Log server adalah engine `Em.Api` yang dijalankan** dengan fitur log server dinyalakan, bukan produk
    atau proses terpisah (lihat bagian "Log server = Em.Api").
+6. **Database store log diatur dari Log Manager:** pilih database internal (yang dipakai API) atau koneksi baru
+   dengan provider MSSQL/MySQL/PostgreSQL dan credential, lalu tombol **Prepare** membangun database-nya
+   (lihat bagian "Database store log").
 
 Rincian lain di catatan ini masih usulan.
 
@@ -612,3 +615,98 @@ kode modul.
 1. Store log memakai database terpisah (usulan) atau cukup database inti?
 2. Pada log server pusat, siapa yang login ke Log Manager: akun di `Em.Api` log server itu sendiri (terpisah dari
    akun aplikasi), atau perlu login tunggal dengan aplikasi asal?
+
+## Database store log (keputusan 2026-10-12)
+
+Keputusan pengguna: di Log Manager bisa dipilih apakah store log memakai **database internal** (yang dipakai
+API) atau **koneksi baru**. Untuk koneksi baru ada pilihan **provider MSSQL/MySQL/PostgreSQL**, isian
+credential, dan tombol **Prepare** untuk membangun database. Ini menjawab pertanyaan "database terpisah atau
+database inti": keduanya bisa, dipilih operator.
+
+### Yang sudah ada di engine
+
+- `DatabaseProvider` sudah mengenal `MicrosoftSqlServer`, `MySql`, `PostgreSql` (`SetDbProvider`,
+  `EM_DB_PROVIDER`).
+- `AddExtraDbConn(name, connectionString, provider)` mendaftarkan koneksi bernama selain "Default"; modul
+  memakai nama koneksi, bukan connection string.
+- Pola **pengaturan terkelola** (`AddManagedStorageSettings`): nilai disimpan di database, dibaca saat start,
+  "Save" tidak mengubah server yang sedang berjalan dan berlaku setelah restart.
+- Password SMTP disimpan terenkripsi (`SmtpSecrets`, kunci di `ta_Meta`). Credential database log memakai
+  pola yang sama.
+
+### Layar: Log Manager > Pengaturan > Database
+
+```
+Store log:  (o) Database internal (dipakai API)     ( ) Koneksi baru
+            -------------------------------------------------------------
+            Provider:  [ MSSQL v ]   (MSSQL / MySQL / PostgreSQL)
+            Server:    [ db-log.local      ]   Port: [ 1433 ]
+            Database:  [ em_log            ]
+            Auth:      [ User + password v ]   (MSSQL di Windows: juga Integrated)
+            User:      [ emlog_app ]   Password: [ ******** ]
+            Opsi:      [x] Enkripsi koneksi (TLS)  [ ] Percayai sertifikat server
+            [ Test koneksi ]  [ Prepare... ]  [ Simpan ]
+            -------------------------------------------------------------
+            Aktif sekarang: internal, skema v3        Tersimpan: em_log@db-log.local (perlu restart)
+```
+
+- **Test koneksi:** buka koneksi, baca versi server, cek hak user, cek ada/tidaknya skema log dan versinya.
+- **Simpan:** menyimpan pengaturan di database inti (password terenkripsi). Mengikuti pola pengaturan
+  terkelola: berlaku setelah restart `Em.Api`; layar menampilkan "aktif sekarang" vs "tersimpan" agar jelas.
+  Simpan ditolak bila skema di koneksi tujuan belum siap (harus Prepare dulu).
+- Hanya pemegang claim `Log Manager Settings`.
+- Untuk container/secret manager: environment variable (mis. `EM_LOG_DB_CONNECTION`, `EM_LOG_DB_PROVIDER`)
+  mengesampingkan pengaturan dari Log Manager, sama seperti `EM_DB_*`. Saat override aktif, layar hanya
+  menampilkan nilai aktif dan tidak menawarkan Simpan.
+
+### Prepare
+
+Membangun atau memperbarui database store log, dengan langkah yang ditampilkan satu per satu (status dan
+pesan tiap langkah):
+
+1. **Koneksi** ke server dengan credential yang diisi.
+2. **Buat database** bila belum ada (opsional, dicentang operator; butuh hak membuat database).
+3. **Buat skema/tabel** store log sesuai provider: tabel telemetry, tabel audit pusat, tabel error/fingerprint,
+   tabel versi skema.
+4. **Upgrade** bila skema lama ditemukan: jalankan skrip pembaruan berurutan. Bila skema lebih baru dari
+   versi engine: ditolak (jangan menurunkan versi).
+5. **Verifikasi:** tulis dan baca satu event uji, lalu hapus.
+
+Aturan keamanan:
+
+- **Tidak pernah menghapus** tabel atau data yang sudah ada. Prepare bisa diulang kapan saja (idempoten).
+- Semua objek memakai prefix/skema milik log engine (mis. skema `emlog` atau prefix `log_`), sehingga database
+  yang sudah berisi tabel lain tidak terganggu.
+- **Dua credential (usulan):** credential **pemilik** (boleh DDL) hanya diminta di dialog Prepare dan tidak
+  disimpan; credential **runtime** yang disimpan cukup punya hak INSERT/SELECT (+ DELETE/drop partisi untuk
+  retensi). Prepare bisa sekaligus memberi hak itu ke user runtime.
+- Skrip per provider ikut di engine (embedded) dan juga disalin ke `doc/sqlscript/<provider>/` agar DBA bisa
+  menjalankannya manual bila Prepare tidak diberi hak DDL. Saat ini `doc/sqlscript/` baru berisi `mssql`;
+  log engine menjadi fitur pertama yang butuh skrip MySQL dan PostgreSQL.
+
+### Perpindahan store
+
+- Mengganti store (internal -> koneksi baru, atau sebaliknya) **tidak memindahkan data lama** secara otomatis.
+  Setelah restart, event baru masuk ke store baru; store lama tidak dihapus.
+- Audit **tidak hilang** saat perpindahan: outbox di aplikasi pengirim hanya ditandai terkirim setelah server
+  menerima, jadi audit yang belum terkirim akan masuk ke store baru.
+- Alat pindah data (salin store lama ke baru) dibahas belakangan bila dibutuhkan.
+
+### Perbedaan per provider (perlu dirancang di plan)
+
+- Retensi telemetry paling murah dengan partisi per hari yang dibuang utuh: SQL Server (partition
+  function/switch), PostgreSQL (declarative partitioning), MySQL (`PARTITION BY RANGE`). Alternatif yang sama
+  untuk semua provider: tabel per hari.
+- Properti JSON: `nvarchar(max)` + `OPENJSON` (SQL Server), `jsonb` + indeks GIN (PostgreSQL), `JSON`
+  (MySQL). Query Log Manager harus dibatasi ke operasi yang tersedia di ketiganya.
+- Pencarian teks pesan: full-text index berbeda di tiap provider; tahap awal cukup `LIKE` dengan batas rentang
+  waktu wajib.
+
+### Pertanyaan terbuka (database store log)
+
+1. Setuju pola **dua credential** (pemilik untuk Prepare, tidak disimpan; runtime disimpan dengan hak minimal)?
+2. Perubahan store berlaku **setelah restart** (sama dengan pengaturan storage) atau perlu bisa pindah tanpa
+   restart?
+3. Ketiga provider wajib didukung sejak tahap pertama, atau mulai MSSQL dulu lalu MySQL/PostgreSQL menyusul?
+4. Audit lokal (outbox) di aplikasi pengirim mengikuti provider database aplikasi itu. Apakah aplikasi ERP juga
+   akan berjalan di MySQL/PostgreSQL, sehingga skrip outbox juga perlu tiga provider?
