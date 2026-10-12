@@ -1804,3 +1804,66 @@ Syarat rancangan sekarang agar wrapper itu murah dibuat nanti:
   data.
 - Pengirim (`LogSender`) dibedakan: proses sendiri, user (token), robot (API key). Wrapper OTLP nanti memakai
   robot/API key untuk aplikasi luar.
+
+## Multi database untuk store log (diskusi 2026-10-12)
+
+Pertanyaan pengguna: saat pindah database, mungkinkah **multi database**, sehingga data juga bisa dibaca dari
+database yang berbeda (mis. database lama setelah pindah)?
+
+Jawaban: mungkin. Usulan: store log bukan satu koneksi, melainkan **daftar store**.
+
+### Model: daftar store
+
+| Peran | Jumlah | Fungsi |
+|---|---|---|
+| **Store tulis** | satu per jenis log (lihat di bawah) | Tempat event baru ditulis |
+| **Store baca** | nol atau lebih | Database lama atau arsip; hanya dibaca, tidak ditulisi event baru |
+
+- Setiap store punya id, nama, provider, koneksi (credential terenkripsi), status (`tulis`/`baca`/`lepas`), dan
+  rentang waktu data yang dimilikinya (waktu event terlama dan terbaru).
+- **Pindah database** = store lama diubah menjadi `baca`, store baru (sesudah Prepare) menjadi `tulis`. Data lama
+  tidak perlu disalin dan tetap bisa dicari.
+- Provider boleh berbeda antar store (mis. store lama MSSQL, store baru PostgreSQL), karena query Log Manager
+  sudah dibatasi ke operasi yang tersedia di ketiga provider.
+- Store bisa **dilepas** (tidak dibaca lagi) dari Log Manager; database-nya tidak dihapus.
+
+### Store tulis per jenis log (opsional)
+
+Daftar store juga memungkinkan memisahkan tujuan menurut jenis: mis. audit ke database `em_audit` (dicadangkan
+ketat, retensi panjang) dan telemetry ke database `em_telemetry` (besar, retensi pendek). Bawaan: satu store tulis
+untuk semua jenis (internal).
+
+### Cara membaca dari beberapa store
+
+- Log Manager, flyout activity, dan `IAuditReader` memanggil satu **pembaca gabungan**. Pembaca itu:
+  1. memilih store yang rentang waktunya beririsan dengan filter (store di luar rentang dilewati);
+  2. menjalankan query yang sama di setiap store terpilih, masing-masing dibatasi N baris;
+  3. menggabungkan hasil menurut waktu (dan `Seq` untuk audit), lalu mengembalikan satu halaman.
+- Cursor halaman berisi posisi per store, sehingga "muat lagi" tetap benar meski data tersebar.
+- `Seq` audit dibuat di outbox database aplikasi dan dibawa apa adanya ke store mana pun, sehingga urutan
+  riwayat satu dokumen tetap benar walaupun sebagian ada di store lama dan sebagian di store baru.
+- Bila satu store tidak bisa dihubungi, hasil tetap ditampilkan dari store lain dengan peringatan "sebagian data
+  tidak tersedia: store X".
+
+### Retensi pada store baca
+
+Job retensi berjalan di semua store (tulis dan baca). Store baca yang sudah kosong ditandai dan bisa dilepas.
+
+### Alternatif: pindahkan data
+
+Selain multi store, bisa disediakan alat "pindahkan data store lama ke store baru" (salin per batch, lalu store
+lama dilepas). Lebih sederhana untuk dibaca, tetapi lama untuk data besar dan butuh kedua database aktif selama
+proses. Usulan: multi store sebagai dasar; alat pindah data menyusul bila dibutuhkan.
+
+### Batasan
+
+- Pengaturan store berlaku setelah restart (sama dengan pengaturan database store log), karena koneksi didaftarkan
+  saat start (`AddExtraDbConn`).
+- Query lintas store lebih lambat dari satu store; filter waktu wajib di Log Manager agar store yang tidak relevan
+  dilewati.
+
+### Pertanyaan terbuka (multi database)
+
+1. Setuju model daftar store (satu tulis + beberapa baca)?
+2. Pemisahan store tulis per jenis (audit vs telemetry) perlu sejak awal, atau cukup satu store tulis dulu?
+3. Alat pindah data perlu di tahap awal?
