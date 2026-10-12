@@ -1664,3 +1664,51 @@ Log Manager (WPF OSHA) --> action biasa di osha.com/api
     database OSHA lalu disalin oleh shipper di dalam proses yang sama (tanpa HTTP) ke database log. Riwayat
     dokumen untuk modul dibaca dari database OSHA.
 - Path endpoint mengikuti base path API (`osha.com/api/logger/...`); nama akhirnya ditentukan di plan.
+
+## Protokol logger: lewat action `/api` atau endpoint sendiri (diskusi 2026-10-12)
+
+Pertanyaan pengguna: logger memakai protokol sendiri, atau masuk ke `/api`?
+
+### Yang sudah ada di engine
+
+- Action dilayani di `/api/{module}/{action}` (`EmApp`: `MapMethods("/api/{module}/{action}", ...)`), lengkap
+  dengan gate identitas, claim, `RequestTrace`, timeout, dan rate limit.
+- Protokol lain memakai **cabang endpoint terpisah** di host yang sama: CDN (`/cdn`), container registry
+  (`/v2`), dan endpoint protokol modul lewat `builder.AddPublicEndpoint("/prefix", handler)`
+  ([engine-public-endpoints.md](../engine/engine-public-endpoints.md)). Cabang ini mengurus auth, batas body,
+  dan error sendiri, di luar claim/timeout action. Prefix `/api`, `/cdn`, `/v2` dicadangkan; endpoint protokol
+  tidak bisa berada di dalam `/api`.
+
+### Perbandingan
+
+| Pilihan | Kelebihan | Kekurangan |
+|---|---|---|
+| **1. Action biasa** (`/api/Logger/PostMeta_Ingest`, body JSON milik kita) | Paling cepat dibuat; auth, claim, client `ServiceWpfBase.PostAsync` dipakai ulang | Format buatan sendiri, hanya client em-system yang bisa mengirim; setiap kiriman log menghasilkan baris `RequestTrace` (log tentang log); terikat timeout dan batas action |
+| **2. Endpoint protokol standar OTLP/HTTP** di cabang sendiri (`/otlp/v1/logs`, `/otlp/v1/traces`) | Standar: SDK OpenTelemetry dan aplikasi non-.NET bisa mengirim langsung; client yang sama bisa diarahkan ke Seq/backend lain; tidak lewat pipeline action (tanpa `RequestTrace`, mendukung gzip dan body besar) | Perlu membaca format OTLP (JSON dan protobuf) dan memasang auth sendiri di cabang itu |
+| **3. Protokol jaringan sendiri** (TCP/UDP, port lain) | Tidak ada yang berarti | Port dan firewall tambahan, TLS sendiri, tidak lewat reverse proxy; tidak disarankan |
+
+Semua pilihan 1 dan 2 tetap di **host, port, dan TLS yang sama** dengan API (contoh OSHA: server yang sama
+dengan action OSHA); yang berbeda hanya path dan format.
+
+### Usulan: dipisah menurut fungsi
+
+| Fungsi | Jalur |
+|---|---|
+| Kirim telemetry (log, error, trace) dari client WPF/MAUI dan aplikasi lain | **Endpoint OTLP/HTTP** lewat `AddPublicEndpoint`, mis. `<server>/otlp/v1/logs` dan `/otlp/v1/traces`. Auth: token user yang login (client) atau API key robot (aplikasi lain), divalidasi dengan mekanisme token engine |
+| Log Manager (query, pengaturan database, Prepare, retensi, error), flyout activity, `PostMeta_AuditEntry` dari UI | **Action biasa** di `/api/...` (`GetMeta_`/`PostMeta_`), karena memang operasi aplikasi yang butuh claim |
+| Telemetry dan audit milik API itu sendiri | Tidak lewat HTTP; ditulis langsung di dalam proses |
+| Kirim audit antar-server (hanya bila nanti ada pusat B/D) | Ditunda. OTLP tidak cocok untuk catatan yang wajib idempoten dan diakui per `Seq`; nanti endpoint/action khusus |
+| Tail live | Nanti lewat engine stream dua arah |
+
+Catatan untuk endpoint OTLP:
+
+- Request ke endpoint ini tidak menghasilkan `RequestTrace` per kiriman; cukup penghitung (diterima, ditolak,
+  ukuran) sebagai metrik, agar tidak terjadi log tentang log.
+- Batas ukuran body, rate limit per pengirim, dan penolakan event yang terlalu besar diatur di cabang itu.
+- Nama prefix (`/otlp`, `/logger`, atau lain) ditentukan di plan; tidak boleh tumpang tindih dengan `/api`,
+  `/cdn`, `/v2`.
+
+### Pertanyaan terbuka (protokol)
+
+1. Setuju telemetry lewat endpoint OTLP standar (pilihan 2), dan semua fungsi lain lewat action `/api`?
+2. OTLP JSON saja di tahap awal (lebih mudah dibaca dan diuji), protobuf menyusul?
