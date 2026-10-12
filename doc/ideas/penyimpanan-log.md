@@ -1,7 +1,8 @@
 # Penyimpanan log engine
 
 - **Tanggal:** 2026-10-12
-- **Status:** diskusi; belum ada kode
+- **Status:** diskusi; belum ada kode. Arah melebar menjadi log engine multi-app dengan telemetry ala Seq
+  (pengguna 2026-10-12), lihat bagian terakhir
 - **Plan turunan:** belum ada
 - **Catatan terkait:** [user-editor-activity.md](user-editor-activity.md) (butuh jejak siapa mengubah akun),
   [registry-purge-gc.md](registry-purge-gc.md) (audit hapus image), [stream-dua-arah.md](stream-dua-arah.md)
@@ -110,3 +111,68 @@ Belum ada; semua di atas masih usulan.
    dengan layar audit yang bisa menggabungkan?
 6. **Retensi bawaan:** 14 hari / 1 GB untuk A dan 1 tahun untuk B masuk akal?
 7. **Log client dikirim ke server:** perlu atau cukup dibaca lokal?
+
+## Diskusi 2026-10-12: log engine multi-app dan telemetry ala Seq
+
+Arah dari pengguna: bukan sekadar tempat simpan log `Em.Api`, tetapi **log engine yang bisa dipakai banyak
+aplikasi**, dan bila memungkinkan menjadi **telemetry seperti Seq** (kumpulkan, cari, tail live, alert).
+Bagian A dan C di atas menjadi bagian dari engine ini; audit (B) tetap terpisah di database karena sifatnya
+catatan bisnis, bukan telemetry.
+
+### Usulan arsitektur
+
+```
+App (Em.Api / WPF / MAUI / app lain)        Log server (modul Em.Api.Core)        Pembaca
+  ILogger + Activity                          POST /v1/logs, /v1/traces (OTLP)       Log Viewer WPF
+  -> enrich (app, versi, instance, user)  ->  auth API key per app               ->  query + filter
+  -> buffer disk lokal (tahan offline)        simpan per hari, retensi per app       tail live (stream)
+  -> kirim batch OTLP/HTTP                    indeks: waktu, app, level, traceId     alert -> SMTP engine
+```
+
+1. **Kontrak kabel: OpenTelemetry (OTLP/HTTP)**, bukan format buatan sendiri. Akibatnya:
+   - aplikasi apa pun (bukan hanya .NET/em-system) bisa mengirim log ke server kita;
+   - SDK client kita bisa diarahkan ke **Seq asli** (Seq menerima OTLP; cek versi dan lisensi terbaru) atau
+     backend lain (Grafana/Loki, SigNoz, OpenObserve) **tanpa ubah kode**, cukup ganti endpoint;
+   - membangun server sendiri menjadi pilihan yang bisa ditunda atau dibatalkan, bukan prasyarat.
+2. **SDK client (library engine, mis. `Em.Telemetry`)** untuk semua host em-system:
+   - satu panggilan di host (mis. `AddEmTelemetry(...)`) memasang provider `ILogger` + `ActivitySource`;
+   - enrichment otomatis: `app` (ApplicationName host), versi, instance/mesin, environment, user aktif,
+     `traceId`/`spanId`;
+   - **buffer di disk lokal** lalu kirim per batch dengan retry. Penting untuk client WPF di laptop yang
+     sering offline; exporter OTel standar hanya menyimpan di memori;
+   - tetap menulis file JSONL lokal (bagian A/C) sebagai cadangan bila server tidak terjangkau lama.
+3. **Trace lintas client-server:** WPF/MAUI mengirim header `traceparent` pada setiap action, sehingga satu
+   klik di client dan request di `Em.Api` (yang sudah punya `RequestTrace`) tampil sebagai satu rangkaian.
+4. **Log server sebagai modul engine** di `Em.Api.Core`, aktif hanya bila host menyalakannya (pola sama dengan
+   registry/NuPak/object storage):
+   - endpoint penerima OTLP; tiap aplikasi pengirim punya API key sendiri (memakai mekanisme robot/token
+     yang sudah ada), kuota dan retensi per app;
+   - penyimpanan: tabel SQL Server per hari (partisi atau tabel bergulir) dengan kolom tetap (waktu, app,
+     level, kategori, pesan, traceId) + properti JSON; columnstore untuk volume besar. Alternatif: segmen
+     file + indeks sendiri. Pilihan bergantung volume (pertanyaan terbuka);
+   - query sederhana dulu (filter kolom + teks + properti), bahasa query ala Seq belakangan.
+5. **Pembaca:** layar WPF "Log Viewer" (filter, detail event, buka seluruh trace, tail live lewat
+   [stream-dua-arah.md](stream-dua-arah.md)), "signal"/query tersimpan, dan alert sederhana (level/hitungan
+   per jendela waktu) yang mengirim email lewat engine SMTP.
+
+### Tahapan (usulan)
+
+1. SDK client: enrichment, file JSONL lokal, buffer disk, export OTLP. Diuji dengan Seq lokal (container)
+   sebagai penerima, tanpa server sendiri.
+2. Propagasi `traceparent` WPF/MAUI ke `Em.Api`.
+3. Log server modul engine: penerima OTLP logs, penyimpanan, retensi, API key per app.
+4. Log Viewer WPF + tail live.
+5. Traces di server, signal/alert, metrics (paling akhir; metrics bisa tetap diserahkan ke Prometheus).
+
+### Pertanyaan terbuka (diskusi multi-app)
+
+1. **"Multi app" itu siapa:** hanya aplikasi berbasis em-system (Em.Api, WPF, MAUI, OshaApp, EmPorium), atau
+   juga aplikasi lain/non-.NET? Menentukan seberapa penting OTLP vs format sendiri.
+2. **Topologi:** satu log server pusat untuk semua aplikasi dan pelanggan, atau tiap instalasi pelanggan punya
+   log server sendiri (self-hosted)? Bila pusat: perlu pemisahan tenant dan hak baca per app.
+3. **Bangun vs pakai:** cukup SDK + Seq/backend yang sudah ada, atau memang ingin server sendiri (alasan: tanpa
+   lisensi pihak ketiga, satu login dan hak akses dengan em-system, terintegrasi di WPF)?
+4. **Volume:** perkiraan event per hari per app. Menentukan apakah SQL Server cukup atau perlu storage khusus.
+5. **Cakupan telemetry:** log saja, log + trace, atau juga metrics?
+6. **Log client WPF ke server:** dikirim otomatis (dengan buffer offline) atau hanya atas persetujuan
+   pengguna? Ada pertimbangan privasi (nama user, nama mesin, isi pesan).
