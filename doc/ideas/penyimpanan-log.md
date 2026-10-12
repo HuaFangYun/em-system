@@ -1363,3 +1363,92 @@ public partial class InvoiceServices(InvoiceDbContext ctx, InvoiceAudit audit) :
 2. Satu request menyimpan ke dua DbContext/database berbeda: entry ikut `SaveChanges` context yang mana? Usulan:
    `AddEntry` menerima context secara eksplisit untuk kasus ini, bawaan context pertama yang menyimpan.
 3. Perlu snapshot di setiap `created`/`posted`, atau modul yang memutuskan per kejadian (seperti contoh)?
+
+## Cara kerja 4: audit sistem (usulan 2026-10-12)
+
+Pertanyaan pengguna: setelah audit modul jelas, bagaimana dengan **audit sistem**, yaitu kejadian milik engine
+sendiri (sign-in, user/role, robot, pengaturan, penghapusan di registry/storage)?
+
+### Prinsip: mekanisme sama dengan modul, pemiliknya engine
+
+- Engine mendaftarkan katalognya sendiri dengan `AddAudit` yang sama seperti modul, tetapi **selalu aktif**:
+  host tidak perlu (dan tidak bisa) menambah atau mematikannya di `Program.cs`. Fitur opsional (registry,
+  NuPak, object storage, log server) mendaftarkan katalognya saat fitur itu dinyalakan.
+- Nama kelompok sistem memakai prefix yang dicadangkan, mis. `System.Auth`, `System.User`. Modul tidak boleh
+  mendaftarkan kelompok berprefix `System.` (ditolak saat start).
+- Engine punya class audit internal per area, setara `InvoiceAudit`, diambil dari DI oleh service engine:
+  `AuthAudit`, `UserAudit`, `RobotAudit`, `SettingsAudit`, `StorageAudit`.
+- Disimpan di tabel audit yang sama di **database inti** (outbox yang sama), lalu dikirim ke log server pusat
+  seperti audit modul.
+
+### Katalog awal (dari action yang sudah ada)
+
+| Kelompok | Kejadian | Sumber di engine |
+|---|---|---|
+| `System.Auth` | `signin.success`, `signin.failed`, `signin.locked`, `signout`, `session.revoked`, `token.rejected`, `debug.accepted`, `debug.impersonate` | `PostGetMeta_SignIn`, sign-in admin, sesi (`ta_SystemSession`), gate debug token di `EmApp` |
+| `System.Password` | `changed.self`, `reset.byAdmin`, `admin.changed`, `admin.reset` | `PostMeta_ChangeMyPassword`, `PostMeta_ResetPassword`, `PostMeta_ChangeAdminPassword`, `PostMeta_ResetAdminPassword` |
+| `System.User` | `created`, `updated`, `deleted`, `state.changed`, `admin.toggled`, `role.granted`, `role.revoked`, `claim.granted`, `claim.revoked` | `PostTa_User_*`, `PostTa_UserRole_*`, `PostTa_UserClaim_*` |
+| `System.Role` | `created`, `updated`, `deleted`, `claim.added`, `claim.removed` | `PostTa_Role_*`, `PostTa_RoleClaim_*` |
+| `System.Robot` | `created`, `updated`, `deleted`, `regenerated`, `access.set` | `PostGetMeta_RobotCreate`, `PostGetMeta_RobotRegenerate`, `PostMeta_RobotUpdate`, `PostMeta_RobotDelete`, `PostMeta_RobotAccessSet` |
+| `System.Settings` | `smtp.changed`, `storage.changed`, `logstore.changed`, `logstore.prepared` | Pengaturan SMTP, storage terkelola, store log (Prepare) |
+| `System.Registry` | `image.deleted`, `tag.deleted`, `manifest.deleted`, `folder.deleted`, `deploy.target.deleted`, `deploy.run` | `PostMeta_Ctn*Delete`, deploy runner |
+| `System.NuPak` | `feed.deleted`, `prefix.deleted`, `version.purged` | `PostMeta_NuPak*` (lihat pertanyaan terbuka tentang audit NuPak yang sudah ada) |
+| `System.ObjectStorage` | `bucket.deleted`, `object.deleted`, `version.purged`, `policy.deleted`, `volume.deleted` | `PostMeta_Store*` |
+
+### Dua cara menulis: ikut transaksi atau langsung
+
+Berbeda dengan modul, banyak kejadian sistem **tidak mengubah data**, atau justru terjadi saat request gagal:
+
+| Cara | Kapan | Contoh |
+|---|---|---|
+| `AddEntry` (ikut `SaveChanges`, satu transaksi) | Kejadian yang mengubah data | Buat user, beri role, hapus robot, ubah pengaturan SMTP |
+| `WriteNowAsync` (transaksi sendiri, langsung) | Kejadian tanpa perubahan data, atau request yang ditolak/gagal | Sign-in gagal, token ditolak, impersonasi debug token, sign-in berhasil |
+
+`WriteNowAsync` tetap ditulis ke outbox lokal (bukan langsung ke log server), jadi tidak bergantung pada log
+server pusat.
+
+### Pelaku (actor)
+
+Audit modul hampir selalu dilakukan user yang login. Audit sistem punya beberapa jenis pelaku, dicatat eksplisit:
+
+- `user`: user login biasa (`cUserId`, akun).
+- `robot`: token robot (nama robot), mis. push NuPak/registry dari CI.
+- `debug`: debug token, dengan `actingAs` bila impersonasi. Menggantikan baris log di `EmApp` yang sekarang
+  menyatakan "Until an audit system exists, this log line is the only trace...".
+- `system`: job background (retensi, GC registry, maintenance object storage), dengan nama job.
+- `anonymous`: belum terautentikasi, mis. sign-in gagal. Akun yang dicoba dicatat sebagai teks, bukan sebagai
+  target user, karena akunnya belum tentu ada.
+
+### Target
+
+Target opsional dan bisa lebih dari satu jenis: user, role, robot, bucket, image, pengaturan. Satu kejadian bisa
+punya pelaku dan target yang sama-sama user (admin `aan` mereset password `budi`), sehingga tab Activity User
+Editor bisa menampilkan "apa yang dilakukan budi" maupun "apa yang dilakukan terhadap budi".
+
+### Perlindungan
+
+- Admin aplikasi **tidak bisa menghapus atau mengubah** audit sistem dari UI. Retensi hanya lewat job dengan batas
+  minimal yang ditetapkan engine (mis. tidak kurang dari 1 tahun).
+- Salinan di log server pusat membuat penghapusan langsung di database aplikasi tetap terlihat (urutan `Seq`
+  bolong). Hash berantai opsional untuk bukti tambahan.
+- Sign-in gagal bisa bervolume tinggi saat serangan. Setiap percobaan tetap dicatat, tetapi alert dan tampilan
+  mengelompokkannya (mis. "250 sign-in gagal untuk akun admin dari 3 alamat dalam 5 menit").
+- Data rahasia tidak pernah masuk: password yang dicoba, token, secret robot, password SMTP. Untuk pengaturan
+  hanya dicatat field yang berubah, dengan nilai rahasia ditulis "diubah".
+
+### Dibaca di mana
+
+- Log Manager: tab **Keamanan** (`System.Auth`, `System.Password`) dengan claim `Log Security Read`, dan tab
+  **Audit data** dengan filter kelompok `System.*`.
+- User Editor tab Activity: `System.User` + `System.Password` + `System.Auth` untuk user itu.
+- Robot Manager, Object Storage Manager, NuGet Manager: masing-masing bisa menampilkan riwayat kelompoknya.
+
+### Pertanyaan terbuka (audit sistem)
+
+1. Sign-in **berhasil** dicatat juga di audit (volume besar di aplikasi dengan banyak user), atau cukup di log
+   akses/telemetry dan hanya kegagalan yang masuk audit?
+2. Audit NuPak yang sudah ada (tabel sendiri, tab Audit di NuGet Manager): dipindah ke `System.NuPak` atau
+   dibiarkan?
+3. Batas minimal retensi audit sistem: 1 tahun?
+4. Perlu alert bawaan untuk kejadian sistem tertentu (mis. impersonasi debug token di production, sign-in gagal
+   beruntun, admin direset) dikirim lewat SMTP?
