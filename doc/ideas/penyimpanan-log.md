@@ -112,6 +112,10 @@ Keputusan pengguna 2026-10-12:
 9. **Topologi dasar = satu instalasi:** setiap `Em.Api` (mis. `osha.com/api`) adalah log server untuk dirinya dan
    client-nya; log masuk lewat endpoint logger di API itu; database store diatur di Log Manager (internal atau
    database lain). Lihat bagian "Contoh OSHA: satu instalasi".
+10. **Belum memakai protokol OTLP.** Yang dibangun: service log internal lewat `ILogger` di server dan di UI;
+    kiriman dari UI lewat action `/api`. Lihat bagian "Keputusan: tanpa OTLP dulu".
+11. **Salinan lokal dikirim lalu dihapus:** setelah login, salinan lokal dikirim di background ke server lalu
+    dihapus; bila pengiriman gagal, tetap disimpan lokal untuk dicoba lagi. Lihat bagian yang sama.
 
 Rincian lain di catatan ini masih usulan.
 
@@ -1712,3 +1716,70 @@ Catatan untuk endpoint OTLP:
 
 1. Setuju telemetry lewat endpoint OTLP standar (pilihan 2), dan semua fungsi lain lewat action `/api`?
 2. OTLP JSON saja di tahap awal (lebih mudah dibaca dan diuji), protobuf menyusul?
+
+## Keputusan: tanpa OTLP dulu, salinan lokal dikirim lalu dihapus (2026-10-12)
+
+Keputusan pengguna:
+
+1. Untuk rancangan ini **belum perlu protokol OTLP**. Yang harus ada: **service log internal** lewat `ILogger` di
+   server dan di UI.
+2. **Salinan lokal:** setelah login, salinan lokal **dikirim di background ke server lalu dihapus**. Bila
+   pengiriman masih gagal, **tetap disimpan lokal** dan dicoba lagi.
+
+Bagian "Protokol logger" di atas tetap disimpan sebagai riwayat; endpoint OTLP menjadi kemungkinan tahap
+lanjut, bukan bagian rancangan ini.
+
+### Service log di server
+
+- Provider `ILogger` milik engine (lihat "Cara kerja 1"), menulis langsung ke store log di dalam proses.
+- Modul tetap menulis lewat `ServicesBase.Logger`/`ILogger` seperti sekarang; tidak ada API log baru untuk modul.
+
+### Service log di UI (WPF/MAUI)
+
+- Engine UI memasang `ILogger` (provider yang sama bentuknya) di host WPF/MAUI, plus handler exception yang tidak
+  tertangani (`DispatcherUnhandledException`, `TaskScheduler.UnobservedTaskException`,
+  `AppDomain.UnhandledException`). Kode layar dan modul UI menulis lewat `ILogger` biasa.
+- Event ditulis dulu ke **file lokal** di `%LocalAppData%\<ApplicationName>\Logs\outbox\` (segmen JSONL), mengikuti
+  nama aplikasi host.
+- Kejadian audit dari UI (`fromClient`: ekspor, cetak lokal) memakai antrean lokal yang sama.
+
+### Alur kirim dari UI
+
+```
+ILogger / audit UI --> segmen lokal (selalu, juga sebelum login dan saat offline)
+                            |
+           sesudah login (dan berkala selama sesi, dan sebelum sign out)
+                            v
+           background: kirim batch lewat action /api, mis. PostMeta_LogIngest(batch)
+                            |
+              berhasil --> hapus segmen
+              gagal    --> segmen tetap di lokal, dicoba lagi pada jadwal/login berikutnya
+```
+
+- Kirim lewat **action biasa** dengan token user yang sedang login; tidak ada endpoint protokol baru.
+- Action ingest tidak menghasilkan baris `RequestTrace` per kiriman (hanya penghitung), agar tidak menjadi log
+  tentang log.
+- Setiap event membawa **user saat event terjadi** (atau "belum login" untuk error saat startup/layar login).
+  Server mencatat terpisah siapa yang mengirim batch, supaya log yang terekam di PC bersama tidak tercatat
+  sebagai milik user yang kebetulan login berikutnya.
+- Batas ukuran folder outbox (mis. 200 MB); bila terlampaui, segmen terlama dibuang dan jumlahnya dilaporkan
+  pada kiriman berikutnya.
+- Tiap batch punya id unik; server mengabaikan batch yang sudah pernah diterima, jadi kirim ulang setelah
+  jaringan putus tidak menggandakan data.
+
+### Audit di server saat store log memakai database lain
+
+Prinsip yang sama berlaku untuk tabel audit lokal di database aplikasi (outbox):
+
+- Audit ditulis ke database aplikasi dalam transaksi data (tetap wajib).
+- Shipper background memindahkan ke store log (database lain), lalu **menghapus** dari database aplikasi setelah
+  berhasil. Bila gagal, baris tetap di database aplikasi dan dicoba lagi.
+- Bila store log = **internal**, tidak ada pemindahan; tabel audit itu sekaligus store.
+- Akibatnya pembaca riwayat (flyout activity, `IAuditReader`) membaca dari **store log**, digabung dengan baris
+  outbox yang belum terpindah, agar entry yang baru saja ditulis langsung tampil.
+
+### Pertanyaan terbuka
+
+1. Penafsiran "ketika login" di atas: pengiriman salinan lokal **client UI** dipicu saat login. Apakah benar,
+   dan apakah aturan "kirim lalu hapus, gagal simpan" juga dimaksudkan untuk outbox audit di database aplikasi
+   (seperti ditulis di atas)?
