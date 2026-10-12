@@ -116,6 +116,8 @@ Keputusan pengguna 2026-10-12:
     kiriman dari UI lewat action `/api`. Lihat bagian "Keputusan: tanpa OTLP dulu".
 11. **Salinan lokal dikirim lalu dihapus:** setelah login, salinan lokal dikirim di background ke server lalu
     dihapus; bila pengiriman gagal, tetap disimpan lokal untuk dicoba lagi. Lihat bagian yang sama.
+12. **OTLP nanti sebagai wrapper** di atas ingest internal, hanya bila ada aplikasi lain (non-em-system) yang
+    ingin menumpang log di emsys. Lihat bagian "OTLP sebagai wrapper".
 
 Rincian lain di catatan ini masih usulan.
 
@@ -1783,3 +1785,22 @@ Prinsip yang sama berlaku untuk tabel audit lokal di database aplikasi (outbox):
 1. Penafsiran "ketika login" di atas: pengiriman salinan lokal **client UI** dipicu saat login. Apakah benar,
    dan apakah aturan "kirim lalu hapus, gagal simpan" juga dimaksudkan untuk outbox audit di database aplikasi
    (seperti ditulis di atas)?
+
+### OTLP sebagai wrapper (keputusan 2026-10-12)
+
+Keputusan pengguna: protokol OTLP bisa dibuat **nanti sebagai wrapper** bila ada aplikasi lain yang ingin
+menumpang log di emsys.
+
+Syarat rancangan sekarang agar wrapper itu murah dibuat nanti:
+
+- Inti penerima log adalah **service ingest internal yang tidak tahu protokol**, mis. `ILogIngest.WriteAsync(
+  IReadOnlyList<LogEvent> events, LogSender sender)`, dengan model event internal (amplop bersama di bagian
+  "Definisi jenis log").
+- Semua jalur memanggil service yang sama: provider `ILogger` di server (langsung), action
+  `PostMeta_LogIngest` dari UI (setelah validasi), dan nanti endpoint OTLP (setelah menerjemahkan format OTLP ke
+  `LogEvent`).
+- Amplop internal memakai bidang yang bisa dipetakan ke OTLP (waktu, level/severity, kategori, pesan, atribut,
+  `traceId`/`spanId`, atribut resource app/instance/versi), supaya terjemahannya satu arah tanpa kehilangan
+  data.
+- Pengirim (`LogSender`) dibedakan: proses sendiri, user (token), robot (API key). Wrapper OTLP nanti memakai
+  robot/API key untuk aplikasi luar.
