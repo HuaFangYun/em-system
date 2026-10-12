@@ -1175,3 +1175,31 @@ Engine mengubahnya ke bentuk kanonik string lewat konverter yang sudah ada (`App
 nilai berurutan dalam JSON, mis. `["U014"]`) untuk disimpan dan diindeks, lalu mengembalikannya ke record saat
 dibaca. Untuk log engine, `KeyPartAttribute` dan konverternya dipindah atau dibagi dari namespace approval agar
 dipakai bersama, sehingga kunci approval dan kunci audit untuk dokumen yang sama selalu identik.
+
+### Revisi: kunci tanpa class tambahan dan tanpa bergantung pada approval (2026-10-12)
+
+Pengguna: approval untuk user masih konsep dan bisa saja dibatalkan, jadi log engine **tidak boleh bergantung**
+pada engine approval. Pertanyaan pengguna: apakah `UserKey` sama dengan class `ta_User`? Jawabannya tidak:
+`ta_User` adalah baris data lengkap, sedangkan `UserKey` hanya pembungkus nilai kunci (`cUserId`). Karena
+itu `UserKey`/`InvoiceKey` dan `[KeyPart]` **dihapus dari usulan**.
+
+Penggantinya: kunci diambil dari **primary key di model EF Core** yang sudah ada. Contoh: `[Key]` pada
+`ta_User.cUserId`, atau `HasKey(k => new { k.cUserId, k.cRoleId })` untuk `ta_UserRole` di `ApiCoreContext`.
+Modul tidak perlu membuat class kunci apa pun.
+
+```csharp
+builder.AddEntityAudit("User", g => g
+   .Root<ta_User>(title: u => u.cUserAccount)              // kunci = primary key ta_User (cUserId)
+   .Child<ta_UserRole>(parent: r => r.cUserId)              // baris anak: cukup sebut kolom yang menunjuk induk
+   .Child<ta_UserCredential>(parent: c => c.cUserId)
+   .Related<ta_Contact>((db, c) => db.ta_Users.Where(u => u.cContactId == c.cContactId).Select(u => u.cUserId))
+   .Secret<ta_UserCredential>(c => c.cCredentialSecret, c => c.cCredentialKey)
+   .Ignore("ustamp", "datestamp", "json_object")
+   .CanRead(c => c.HasClaim(UserManagerClaims.Access)));
+```
+
+- **Kunci satu kolom** disimpan apa adanya: `"U014"`. Membaca: `GetMeta_AuditActivity_ByDoc("User", "U014", null, 30)`.
+- **Kunci gabungan** (mis. baris `ta_UserRole`) disimpan engine sebagai nilai berurutan sesuai urutan primary key
+  di model EF, mis. `["U014","R-FIN"]`. Modul tidak merangkainya sendiri.
+- Bila suatu saat approval dipakai untuk dokumen yang sama, cukup dipastikan kedua engine menghasilkan bentuk
+  kunci yang sama; itu urusan integrasi, bukan prasyarat log engine.
