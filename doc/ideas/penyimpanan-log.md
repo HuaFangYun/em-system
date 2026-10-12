@@ -1,9 +1,9 @@
 # Penyimpanan log engine
 
 - **Tanggal:** 2026-10-12
-- **Status:** dipertimbangkan; belum ada kode. Arah (pengguna 2026-10-12): satu log engine terpusat untuk
-  audit data dan telemetry sistem; lihat "Keputusan yang sudah jelas" dan bagian "Audit data dan telemetry terpusat"
-- **Plan turunan:** belum ada
+- **Status:** jadi plan (2026-10-12, atas permintaan pengguna; pertanyaan terbuka yang tersisa memakai usulan
+  bawaan di §2 plan). Arah (pengguna 2026-10-12): satu log engine terpusat untuk audit data dan telemetry sistem
+- **Plan turunan:** [plan/unexecuted/penyimpanan-log.md](../../plan/unexecuted/penyimpanan-log.md)
 - **Catatan terkait:** [user-editor-activity.md](user-editor-activity.md) (butuh jejak siapa mengubah akun),
   [registry-purge-gc.md](registry-purge-gc.md) (audit hapus image), [stream-dua-arah.md](stream-dua-arah.md)
   (calon jalur tail log live), [status-bar.md](status-bar.md)
