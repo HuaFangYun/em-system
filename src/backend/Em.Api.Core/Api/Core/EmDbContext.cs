@@ -22,6 +22,17 @@ namespace Em.Api.Core
          optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
       }
 
+      /// <summary>
+      /// Maps the engine's shared entities. Every engine context includes <c>ta_LogAudit</c> so audit entries
+      /// written through <c>IAuditWriter</c> can be saved in the same transaction as the context's own data;
+      /// the table only has to exist in a database whose context actually writes audit entries. Derived
+      /// contexts must call this base method.
+      /// </summary>
+      protected override void OnModelCreating(ModelBuilder modelBuilder) {
+         base.OnModelCreating(modelBuilder);
+         Em.Api.Core.Log.ta_LogAudit.Configure(modelBuilder);
+      }
+
       /// <summary>Applies the engine's shared model conventions.</summary>
       protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder) {
          base.ConfigureConventions(configurationBuilder);

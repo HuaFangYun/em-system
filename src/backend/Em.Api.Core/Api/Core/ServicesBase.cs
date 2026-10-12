@@ -252,6 +252,17 @@ namespace Em.Api.Core
          return new RsaKeyPair(publicKey, privateKey);
       }
 
+      /// <summary>
+      /// Writes an engine (<c>System.*</c>) audit entry now, in its own transaction, after an action succeeded.
+      /// Does nothing while the log server is off.
+      /// </summary>
+      internal Task AuditSystemAsync(string group, string key, string kind, string summary, string? targetType = null, object? detail = null) =>
+         GetService<Em.Api.Core.Log.Audit.IAuditWriter>() is { } writer
+            ? writer.WriteNowAsync(new Em.Api.Core.Log.Audit.AuditEntryDraft {
+               Group = group, Key = key, Kind = kind, TargetType = targetType, Summary = summary, Detail = detail
+            })
+            : Task.CompletedTask;
+
       #region Business Task
 
       private BusinessTaskRunner BusinessTasks => App.ServiceProvider.GetRequiredService<BusinessTaskRunner>();

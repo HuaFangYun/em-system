@@ -16,7 +16,11 @@ namespace Em.Api.Shared
    {
       // The DI container is not built yet when AddService is called, so a standalone bootstrap logger
       // (not from the ServiceProvider) is used just for the registration process logs.
-      private static readonly ILoggerFactory BootstrapLoggerFactory = LoggerFactory.Create(b => b.AddConsole());
+      // Also kept in memory (BootstrapLogBuffer) so AddLogServer can store what was written before the host existed.
+      private static readonly ILoggerFactory BootstrapLoggerFactory = LoggerFactory.Create(b => {
+         b.AddConsole();
+         b.AddProvider(Em.Api.Core.Log.BootstrapLogBuffer.Provider);
+      });
       private static readonly ILogger Logger = BootstrapLoggerFactory.CreateLogger<EmAppBuilder>();
 
       internal IServiceCollection Services { get; init; } = null!;

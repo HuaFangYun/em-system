@@ -75,6 +75,7 @@ public sealed partial class NuPakServices
       NuPakOperations.Audit(db, Actor, "PrefixDelete", detail: row.cNuPakPrefixName,feed:feed);
       await db.SaveChangesAsync(); await tx.CommitAsync();
       } finally {store.Gate.Release();}
+      await AuditSystemAsync("System.NuPak", prefixId, "prefix.deleted", $"Deleted prefix {prefixId} of feed {feedId}", "prefix", new { feedId });
    }
    /// <inheritdoc />
    [GetAction(claim: INuPakServices.ManagerClaim)]

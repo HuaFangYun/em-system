@@ -54,6 +54,8 @@ namespace Em.Ui.Maui.Core
 
          InitInternalServices(app);
          InitBuilder(app, builder);
+         // After the builder callback: the log engine needs ApplicationName.
+         InitClientLog(app);
 
          // Closed here, not at the end of InitBuilder: from outside, "finished being built" means all of
          // BuildApp has finished, and the only place that may decide that moment is this line.

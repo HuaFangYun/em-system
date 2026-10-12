@@ -1,5 +1,6 @@
 using System.Data;
 using Microsoft.EntityFrameworkCore;
+using Em.Api.Core.Log.Audit;
 using Em.Api.Core.Models;
 using Em.Shared;
 
@@ -12,6 +13,9 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
    private RobotContext Db => db;
    private IRobotAccessManager[] Managers => managers.ToArray();
    private static ActionException NotFound(string what) => new($"{what} was not found.", 404);
+   private IAuditWriter Audit => GetService<IAuditWriter>() ?? throw new InvalidOperationException("IAuditWriter is not registered.");
+   private Task AuditNowAsync(string robotId, string kind, string summary, object? detail = null) =>
+      Audit.WriteNowAsync(new AuditEntryDraft { Group = "System.Robot", Key = robotId, Kind = kind, TargetType = "robot", Summary = summary, Detail = detail });
    private async Task<RobotAccessInfo[]> ReadAccessesAsync() {
       var all = new List<RobotAccessInfo>();
       foreach (var manager in Managers) all.AddRange(await manager.ReadAsync(AbortToken));
@@ -72,6 +76,8 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
          cRobotTokenExpiry = tokenExpiry, ustamp = now, datestamp = now
       };
       db.Robots.Add(row);
+      Audit.AddEntry(new AuditEntryDraft { Group = "System.Robot", Key = row.cRobotId, Kind = "created", TargetType = "robot", DocNo = name,
+         Summary = $"Created robot {name}", Detail = new { owner = owner?.cUserAccount, tokenExpiry } });
       await SaveOrConflictAsync(db, $"Robot '{name}' already exists.");
       return new RobotToken { Robot = ToInfo(row, [], owner?.cUserAccount), Token = token };
    }
@@ -91,6 +97,8 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
       robot.cRobotTokenLastUsed = null;
       robot.ustamp = DateTime.UtcNow;
       db.UpdateRow(robot);
+      Audit.AddEntry(new AuditEntryDraft { Group = "System.Robot", Key = robot.cRobotId, Kind = "regenerated", TargetType = "robot",
+         DocNo = robot.cRobotName, Summary = $"Regenerated the token of robot {robot.cRobotName}", Detail = new { tokenExpiry } });
       await db.SaveChangesAsync();
       var ownerAccount = robot.cRobotOwner_cUserId is { } ownerId
          ? await db.Users.AsNoTracking().Where(u => u.cUserId == ownerId).Select(u => u.cUserAccount).SingleOrDefaultAsync(AbortToken)
@@ -112,6 +120,7 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
          .SetProperty(r => r.cRobotTokenExpiry, tokenExpiry)
          .SetProperty(r => r.ustamp, now));
       if (rows == 0) throw NotFound("Robot");
+      await AuditNowAsync(robotId, "updated", $"Updated robot ({(isActive ? "active" : "inactive")})", new { description = text, isActive, tokenExpiry });
    }
 
    #endregion
@@ -121,7 +130,10 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
    public async Task PostMeta_RobotDelete(string robotId) {
       var providers = Managers;
       await using (var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, AbortToken)) {
-         await RequireRobotAsync(db, robotId);
+         var robot = await RequireRobotAsync(db, robotId);
+         Audit.Use(db).AddEntry(new AuditEntryDraft { Group = "System.Robot", Key = robotId, Kind = "deleted", TargetType = "robot",
+            DocNo = robot.cRobotName, Summary = $"Deleted robot {robot.cRobotName}" });
+         await db.SaveChangesAsync(AbortToken);
          foreach (var manager in providers) await manager.PrepareDeleteAsync(db, robotId, AbortToken);
          await db.Robots.Where(r => r.cRobotId == robotId).ExecuteDeleteAsync(AbortToken);
          await tx.CommitAsync(AbortToken);
@@ -139,6 +151,8 @@ public class RobotServices(RobotContext db, IEnumerable<IRobotAccessManager> man
       if (access.Length != 0 && !definition.Options.Any(o => o.Code == access))
          throw new ActionException("Invalid access for this manager.", 400);
       await manager.SetAsync(robotId, resourceId, access, AbortToken);
+      await AuditNowAsync(robotId, "access.set", access.Length == 0 ? $"Removed access to {resourceId} ({managerId})" : $"Set access '{access}' to {resourceId} ({managerId})",
+         new { managerId, resourceId, access });
    }
    // All times in the registry are UTC. Times from the UI of Local kind are converted to UTC; those with
    // no kind are taken as already UTC.

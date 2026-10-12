@@ -58,7 +58,10 @@ namespace Em.Api.Core
       private static int _counter;
 
       private readonly ILogger _logger;
+      private readonly HttpContext _http;
+      private readonly LogLevel _infoLevel;
       private readonly string _id;
+      private readonly string _requestId;
       private readonly string _method;
       private readonly string _routeLabel;
       private readonly string _caller;
@@ -69,7 +72,16 @@ namespace Em.Api.Core
 
       private RequestTrace(ILogger logger, HttpContext http, string routeLabel) {
          _logger = logger;
+         _http = http;
          _id = (Interlocked.Increment(ref _counter) & 0xFFFFF).ToString("X5");
+         // The short id restarts with the process and wraps; the stored request id adds the instance and the
+         // start time so it stays unique across restarts and servers.
+         _requestId = $"{Environment.MachineName}:{_id}:{DateTime.UtcNow:yyyyMMddHHmmss}";
+         http.Items[Em.Api.Core.Log.Audit.AuditWriter.RequestIdItemKey] = _requestId;
+         // Reading or sending logs must not produce stored log rows about itself: the log module's own
+         // requests are traced at Debug level, which is not stored by default.
+         _infoLevel = routeLabel.StartsWith(Defaults.LogModuleName + "/", StringComparison.OrdinalIgnoreCase)
+            ? LogLevel.Debug : LogLevel.Information;
          _method = http.Request.Method;
          _routeLabel = routeLabel;
          _caller = DescribeCaller(http);
@@ -85,8 +97,8 @@ namespace Em.Api.Core
          var logger = http.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger(LoggerCategory);
          var trace = new RequestTrace(logger, http, routeLabel);
 
-         trace._logger.LogInformation("#{Id} IN     {Method} {Route} from {Caller}",
-            trace._id, trace._method, trace._routeLabel, trace._caller);
+         trace._logger.Log(trace._infoLevel, "#{Id} {Phase,-6} {Method} {Route} from {Caller}",
+            trace._id, "IN", trace._method, trace._routeLabel, trace._caller);
 
          return trace;
       }
@@ -99,14 +111,38 @@ namespace Em.Api.Core
       internal void Identified(ActionRequest request) => _request = request;
 
       /// <summary>
+      /// Opens the logging scope of the request: its unique id, trace id and client address. Lines written by
+      /// any code while the scope is open carry these values (the log engine stores them as envelope fields).
+      /// </summary>
+      internal IDisposable? BeginRequestScope() =>
+         _logger.BeginScope(new Dictionary<string, object?> {
+            ["RequestId"] = _requestId,
+            ["TraceId"] = Activity.Current?.TraceId.ToString(),
+            ["ClientAddress"] = _http.Connection.RemoteIpAddress?.ToString()
+         });
+
+      /// <summary>Opens the logging scope of the caller's identity, once the gate has checked it.</summary>
+      internal IDisposable? BeginIdentityScope() {
+         if (_request is not { IsAuthenticated: true } request) return null;
+         return _logger.BeginScope(new Dictionary<string, object?> {
+            ["UserId"] = request.cUserId,
+            ["Account"] = request.cUserAccount,
+            ["SessionId"] = request.cUserSessionId,
+            ["DebugKey"] = request.DebugKeyName,
+            ["Impersonating"] = request.IsImpersonating,
+            ["ActingAs"] = request.IsImpersonating ? request.cUserAccount : null
+         });
+      }
+
+      /// <summary>
       /// Records that the action started being handled, and starts the processing timer. Called after its
       /// arguments are bound, so what is measured is really the action's working time.
       /// </summary>
       internal void Processing() {
          _startedTimestamp = Stopwatch.GetTimestamp();
 
-         _logger.LogInformation("#{Id} START  {Method} {Route} from {Caller} as {User}",
-            _id, _method, _routeLabel, _caller, DescribeUser());
+         _logger.Log(_infoLevel, "#{Id} {Phase,-6} {Method} {Route} from {Caller} as {User}",
+            _id, "START", _method, _routeLabel, _caller, DescribeUser());
       }
 
       /// <summary>
@@ -115,8 +151,8 @@ namespace Em.Api.Core
       /// </summary>
       internal void Completed(ActionResult result) {
          _logger.Log(LevelFor(result.StatusCode, result.ValidResult),
-            "#{Id} DONE   {Method} {Route} from {Caller} as {User} - {StatusCode} in {Elapsed:0.0} ms (total {Total:0.0} ms)",
-            _id, _method, _routeLabel, _caller, DescribeUser(), result.StatusCode,
+            "#{Id} {Phase,-6} {Method} {Route} from {Caller} as {User} - {StatusCode} in {Elapsed:0.0} ms (total {Total:0.0} ms)",
+            _id, "DONE", _method, _routeLabel, _caller, DescribeUser(), result.StatusCode,
             Stopwatch.GetElapsedTime(_startedTimestamp).TotalMilliseconds,
             Stopwatch.GetElapsedTime(_receivedTimestamp).TotalMilliseconds);
       }
@@ -136,9 +172,9 @@ namespace Em.Api.Core
             ? "the caller went away"
             : "it ran out of time";
 
-         _logger.LogWarning(
-            "#{Id} ABORT  {Method} {Route} from {Caller} as {User} - {Reason} after {Elapsed:0.0} ms (total {Total:0.0} ms)",
-            _id, _method, _routeLabel, _caller, DescribeUser(), described,
+         _logger.Log(_infoLevel == LogLevel.Debug ? LogLevel.Debug : LogLevel.Warning,
+            "#{Id} {Phase,-6} {Method} {Route} from {Caller} as {User} - {Reason} after {Elapsed:0.0} ms (total {Total:0.0} ms)",
+            _id, "ABORT", _method, _routeLabel, _caller, DescribeUser(), described,
             Stopwatch.GetElapsedTime(_startedTimestamp).TotalMilliseconds,
             Stopwatch.GetElapsedTime(_receivedTimestamp).TotalMilliseconds);
       }
@@ -149,17 +185,18 @@ namespace Em.Api.Core
       /// </summary>
       internal void Rejected(ActionResult result) {
          _logger.Log(LevelFor(result.StatusCode, result.ValidResult),
-            "#{Id} REJECT {Method} {Route} from {Caller} as {User} - {StatusCode} {Reason} after {Elapsed:0.0} ms",
-            _id, _method, _routeLabel, _caller, DescribeUser(), result.StatusCode,
+            "#{Id} {Phase,-6} {Method} {Route} from {Caller} as {User} - {StatusCode} {Reason} after {Elapsed:0.0} ms",
+            _id, "REJECT", _method, _routeLabel, _caller, DescribeUser(), result.StatusCode,
             result.ErrorMessage ?? "no reason given",
             Stopwatch.GetElapsedTime(_receivedTimestamp).TotalMilliseconds);
       }
 
       // 500 and above is a server error, so it deserves Error; 4xx is a caller error, so Warning is enough
       // to keep the production console from filling up with things that are not disturbances.
-      private static LogLevel LevelFor(int statusCode, bool validResult) =>
-         validResult ? LogLevel.Information :
-         statusCode >= 500 ? LogLevel.Error : LogLevel.Warning;
+      // The log module's own lines stay at Debug unless the server failed (5xx).
+      private LogLevel LevelFor(int statusCode, bool validResult) =>
+         validResult ? _infoLevel :
+         statusCode >= 500 ? LogLevel.Error : _infoLevel == LogLevel.Debug ? LogLevel.Debug : LogLevel.Warning;
 
       /// <summary>
       /// Composes the caller's label for the log: the account name when the name is proven from data,

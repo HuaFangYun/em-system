@@ -72,6 +72,19 @@ namespace Em
       /// </summary>
       public const string ApprovalModuleName = "core.approval";
 
+      /// <summary>
+      /// Name of the module holding the log engine's management and ingest actions (Log Manager, client
+      /// telemetry). Request trace lines of this module are written at Debug level so reading or sending
+      /// logs does not produce stored log rows about itself.
+      /// </summary>
+      public const string LogModuleName = "core.log";
+
+      /// <summary>
+      /// Name of the module holding the audit activity actions used by module screens. The rights that apply
+      /// come from the audit group's read rule, checked inside each action.
+      /// </summary>
+      public const string AuditModuleName = "core.audit";
+
       /// <summary>User ID of the debugger account.</summary>
       public const string DebuggerUserId = "99999999999999999999999999";
 

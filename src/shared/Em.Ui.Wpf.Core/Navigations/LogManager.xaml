@@ -1,0 +1,805 @@
+<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:Em.Ui.Wpf.Navigations" xmlns:controls="clr-namespace:Em.Ui.Wpf.Controls" xmlns:shared="clr-namespace:Em.Ui.Wpf.Shared" xmlns:fa="http://schemas.fontawesome.com/icons/fonts" x:Class="Em.Ui.Wpf.Navigations.LogManager" x:Name="logRoot">
+   <UserControl.DataContext>
+      <local:LogManagerVm/>
+   </UserControl.DataContext>
+   <UserControl.Resources>
+      <ResourceDictionary>
+         <ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="pack://application:,,,/Em.Ui.Wpf.Core;component/Styles/MaterialDesign.xaml"/>
+         </ResourceDictionary.MergedDictionaries>
+         <BooleanToVisibilityConverter x:Key="boolVisibility"/>
+         <Style x:Key="logRowStyle" TargetType="ListBoxItem" BasedOn="{StaticResource listRowStyle}">
+            <EventSetter Event="MouseDoubleClick" Handler="OnRowDoubleClick"/>
+         </Style>
+         <Style x:Key="logSeparatorStyle" TargetType="Border">
+            <Setter Property="Width" Value="1"/>
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Margin" Value="14,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="{StaticResource outlineBrush}"/>
+         </Style>
+         <Style x:Key="filterBoxStyle" TargetType="TextBox" BasedOn="{StaticResource fieldBoxStyle}">
+            <Setter Property="Width" Value="150"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+         </Style>
+         <DataTemplate x:Key="optionTemplate">
+            <TextBlock Text="{Binding Caption}" TextTrimming="CharacterEllipsis"/>
+         </DataTemplate>
+         <!-- Caption/value lines used by the summary and the detail sheets. -->
+         <DataTemplate x:Key="lineTemplate">
+            <Grid Margin="0,3">
+               <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="150"/>
+                  <ColumnDefinition Width="*"/>
+               </Grid.ColumnDefinitions>
+               <TextBlock Text="{Binding Caption}" Style="{StaticResource metaLabelStyle}"/>
+               <TextBox Grid.Column="1" Text="{Binding Value, Mode=OneWay}" IsReadOnly="True" BorderThickness="0" Background="Transparent" Foreground="{DynamicResource themeForegroundBrush}" TextWrapping="Wrap" Padding="0"/>
+            </Grid>
+         </DataTemplate>
+         <DataTemplate x:Key="auditRowTemplate">
+            <Grid>
+               <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="150"/>
+                  <ColumnDefinition Width="150"/>
+                  <ColumnDefinition Width="160"/>
+                  <ColumnDefinition Width="130"/>
+                  <ColumnDefinition Width="140"/>
+                  <ColumnDefinition Width="*"/>
+               </Grid.ColumnDefinitions>
+               <TextBlock Text="{Binding Time}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+               <TextBlock Grid.Column="1" Text="{Binding Group}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Group}"/>
+               <TextBlock Grid.Column="2" Text="{Binding Kind}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Entry.Kind}"/>
+               <TextBlock Grid.Column="3" Text="{Binding Actor}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Actor}"/>
+               <TextBlock Grid.Column="4" Text="{Binding Target}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Target}"/>
+               <TextBlock Grid.Column="5" Text="{Binding Summary}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Summary}"/>
+            </Grid>
+         </DataTemplate>
+      </ResourceDictionary>
+   </UserControl.Resources>
+   <Grid ClipToBounds="True" PreviewKeyDown="OnPreviewKeyDown">
+      <Grid>
+         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+         </Grid.RowDefinitions>
+         <controls:EmTabStrip Margin="22,8,22,0" ItemsSource="{Binding Tabs}" SelectedItem="{Binding ActiveTab, Mode=TwoWay}" TitlePath="Title" CanReorder="False" IsEnabled="{Binding CanBrowse}"/>
+
+         <!-- Range and reload, shared by every tab -->
+         <ScrollViewer Grid.Row="1" Margin="22,12,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+            <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanBrowse}">
+               <TextBlock Text="Range" Style="{StaticResource fieldLabelStyle}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+               <ComboBox Width="170" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Ranges}" SelectedValuePath="Value" SelectedValue="{Binding Range}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Time range"/>
+               <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[RefreshCommand]}" Margin="8,0,0,0">
+                  <StackPanel Orientation="Horizontal">
+                     <fa:FontAwesome Icon="Solid_ArrowsRotate" Style="{StaticResource buttonIconStyle}"/>
+                     <TextBlock Text="Reload" VerticalAlignment="Center"/>
+                  </StackPanel>
+               </Button>
+            </StackPanel>
+         </ScrollViewer>
+
+         <!-- Summary -->
+         <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsSummaryTab, Converter={StaticResource boolVisibility}}">
+            <Border Margin="22,0,22,16" Style="{StaticResource cardStyle}" Padding="22,12,22,16">
+               <StackPanel>
+                  <TextBlock Text="SUMMARY" Style="{StaticResource sectionCaptionStyle}"/>
+                  <ItemsControl ItemsSource="{Binding SummaryLines}" Margin="0,8,0,0">
+                     <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                           <Grid Margin="0,3">
+                              <Grid.ColumnDefinitions>
+                                 <ColumnDefinition Width="220"/>
+                                 <ColumnDefinition Width="*"/>
+                                 <ColumnDefinition Width="Auto"/>
+                              </Grid.ColumnDefinitions>
+                              <TextBlock Text="{Binding Caption}" Style="{StaticResource metaLabelStyle}" VerticalAlignment="Center"/>
+                              <TextBlock Grid.Column="1" Text="{Binding Value}" Style="{StaticResource metaValueStyle}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                              <Button Grid.Column="2" Style="{StaticResource textButtonStyle}" Content="Open" Visibility="{Binding CanOpen, Converter={StaticResource boolVisibility}}"
+                                      Command="{Binding DataContext.Commands[OpenSummaryLineCommand], ElementName=logRoot}" CommandParameter="{Binding}" AutomationProperties.Name="{Binding Caption}"/>
+                           </Grid>
+                        </DataTemplate>
+                     </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+               </StackPanel>
+            </Border>
+         </ScrollViewer>
+
+         <!-- Audit -->
+         <Grid Grid.Row="2" Visibility="{Binding IsAuditTab, Converter={StaticResource boolVisibility}}">
+            <Grid.RowDefinitions>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Margin="22,0,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+               <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanBrowse}">
+                  <ComboBox Width="230" Margin="0,0,8,0" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Groups}" SelectedValuePath="Value" SelectedValue="{Binding AuditGroup}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Audit group"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding AuditKind, UpdateSourceTrigger=PropertyChanged}" Tag="Kind" ToolTip="Event kind, e.g. created" AutomationProperties.Name="Kind"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding AuditKey, UpdateSourceTrigger=PropertyChanged}" Tag="Key" ToolTip="Target key (exact)" AutomationProperties.Name="Key"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding AuditDocNo, UpdateSourceTrigger=PropertyChanged}" Tag="Document no." ToolTip="Document number (exact)" AutomationProperties.Name="Document number"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding AuditUser, UpdateSourceTrigger=PropertyChanged}" Tag="User id" ToolTip="Actor user id (exact)" AutomationProperties.Name="User id"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding AuditSession, UpdateSourceTrigger=PropertyChanged}" Tag="Session id" ToolTip="Session id (exact)" AutomationProperties.Name="Session id"/>
+                  <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SearchAuditCommand]}" IsDefault="{Binding IsAuditTab}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_MagnifyingGlass" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Search" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+                  <Border Style="{StaticResource logSeparatorStyle}"/>
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[OpenAuditCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_Eye" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Details" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+               </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Row="1" Margin="22,0,22,0" Style="{StaticResource cardStyle}" Padding="0">
+               <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <Grid MinWidth="980">
+                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                     </Grid.RowDefinitions>
+                     <Grid Margin="24,12,20,10">
+                        <Grid.ColumnDefinitions>
+                           <ColumnDefinition Width="150"/>
+                           <ColumnDefinition Width="150"/>
+                           <ColumnDefinition Width="160"/>
+                           <ColumnDefinition Width="130"/>
+                           <ColumnDefinition Width="140"/>
+                           <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="TIME" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="1" Text="GROUP" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="2" Text="EVENT" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="3" Text="BY" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="4" Text="TARGET" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="5" Text="SUMMARY" Style="{StaticResource sectionCaptionStyle}"/>
+                     </Grid>
+                     <ListBox Grid.Row="1" ItemsSource="{Binding AuditRows}" SelectedItem="{Binding SelectedAudit, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource logRowStyle}" ItemTemplate="{StaticResource auditRowTemplate}" BorderThickness="0" IsEnabled="{Binding CanBrowse}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Audit entries"/>
+                     <Button Grid.Row="2" Style="{StaticResource textButtonStyle}" Content="Load more" HorizontalAlignment="Left" Margin="20,6,0,10" Command="{Binding Commands[MoreAuditCommand]}" Visibility="{Binding HasMoreAudit, Converter={StaticResource boolVisibility}}"/>
+                  </Grid>
+               </ScrollViewer>
+            </Border>
+         </Grid>
+
+         <!-- Security -->
+         <Grid Grid.Row="2" Visibility="{Binding IsSecurityTab, Converter={StaticResource boolVisibility}}">
+            <Grid.RowDefinitions>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Margin="22,0,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+               <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanBrowse}">
+                  <ComboBox Width="230" Margin="0,0,8,0" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding SecurityGroups}" SelectedValuePath="Value" SelectedValue="{Binding SecurityGroup}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Security group"/>
+                  <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SearchSecurityCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_MagnifyingGlass" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Search" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+               </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Row="1" Margin="22,0,22,12" Style="{StaticResource cardStyle}" Padding="22,12,22,12">
+               <StackPanel>
+                  <TextBlock Text="FAILED SIGN-INS (PER ACCOUNT AND ADDRESS, 5 MINUTES)" Style="{StaticResource sectionCaptionStyle}"/>
+                  <ItemsControl ItemsSource="{Binding SignInFailures}" Margin="0,8,0,0" MaxHeight="180">
+                     <ItemsControl.Template>
+                        <ControlTemplate TargetType="ItemsControl">
+                           <ScrollViewer VerticalScrollBarVisibility="Auto">
+                              <ItemsPresenter/>
+                           </ScrollViewer>
+                        </ControlTemplate>
+                     </ItemsControl.Template>
+                     <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                           <Grid Margin="0,2">
+                              <Grid.ColumnDefinitions>
+                                 <ColumnDefinition Width="170"/>
+                                 <ColumnDefinition Width="200"/>
+                                 <ColumnDefinition Width="200"/>
+                                 <ColumnDefinition Width="*"/>
+                              </Grid.ColumnDefinitions>
+                              <TextBlock Text="{Binding WindowStart, Converter={x:Static local:LogManager.LocalTimeConverter}}"/>
+                              <TextBlock Grid.Column="1" Text="{Binding Account}" TextTrimming="CharacterEllipsis"/>
+                              <TextBlock Grid.Column="2" Text="{Binding Address}" TextTrimming="CharacterEllipsis"/>
+                              <TextBlock Grid.Column="3" Text="{Binding Count, StringFormat={}{0:N0} failed}"/>
+                           </Grid>
+                        </DataTemplate>
+                     </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+               </StackPanel>
+            </Border>
+            <Border Grid.Row="2" Margin="22,0,22,0" Style="{StaticResource cardStyle}" Padding="0">
+               <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <Grid MinWidth="980">
+                     <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                     </Grid.RowDefinitions>
+                     <ListBox ItemsSource="{Binding SecurityRows}" SelectedItem="{Binding SelectedAudit, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource logRowStyle}" ItemTemplate="{StaticResource auditRowTemplate}" BorderThickness="0" Margin="0,8,0,0" IsEnabled="{Binding CanBrowse}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Security entries"/>
+                     <Button Grid.Row="1" Style="{StaticResource textButtonStyle}" Content="Load more" HorizontalAlignment="Left" Margin="20,6,0,10" Command="{Binding Commands[MoreSecurityCommand]}" Visibility="{Binding HasMoreSecurity, Converter={StaticResource boolVisibility}}"/>
+                  </Grid>
+               </ScrollViewer>
+            </Border>
+         </Grid>
+
+         <!-- Errors -->
+         <Grid Grid.Row="2" Visibility="{Binding IsErrorsTab, Converter={StaticResource boolVisibility}}">
+            <Grid.RowDefinitions>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Margin="22,0,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+               <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanBrowse}">
+                  <ComboBox Width="170" Margin="0,0,8,0" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding ErrorStates}" SelectedValuePath="Value" SelectedValue="{Binding ErrorState}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Error state"/>
+                  <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SearchErrorsCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_MagnifyingGlass" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Search" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+                  <Border Style="{StaticResource logSeparatorStyle}"/>
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[OpenErrorCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_Eye" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Details" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+               </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Row="1" Margin="22,0,22,0" Style="{StaticResource cardStyle}" Padding="0">
+               <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <Grid MinWidth="980">
+                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                     </Grid.RowDefinitions>
+                     <Grid Margin="24,12,20,10">
+                        <Grid.ColumnDefinitions>
+                           <ColumnDefinition Width="150"/>
+                           <ColumnDefinition Width="220"/>
+                           <ColumnDefinition Width="*"/>
+                           <ColumnDefinition Width="80"/>
+                           <ColumnDefinition Width="70"/>
+                           <ColumnDefinition Width="110"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="LAST SEEN" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="1" Text="TYPE" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="2" Text="WHERE" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="3" Text="COUNT" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="4" Text="USERS" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="5" Text="STATE" Style="{StaticResource sectionCaptionStyle}"/>
+                     </Grid>
+                     <ListBox Grid.Row="1" ItemsSource="{Binding ErrorRows}" SelectedItem="{Binding SelectedError, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource logRowStyle}" BorderThickness="0" IsEnabled="{Binding CanBrowse}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="Error groups">
+                        <ListBox.ItemTemplate>
+                           <DataTemplate>
+                              <Grid>
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="220"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="110"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock Text="{Binding LastSeen}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding Type}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Group.SampleMessage}"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding Frame}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Frame}"/>
+                                 <TextBlock Grid.Column="3" Text="{Binding Count}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="4" Text="{Binding Users}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="5" Text="{Binding State}" VerticalAlignment="Center"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ListBox.ItemTemplate>
+                     </ListBox>
+                     <Button Grid.Row="2" Style="{StaticResource textButtonStyle}" Content="Load more" HorizontalAlignment="Left" Margin="20,6,0,10" Command="{Binding Commands[MoreErrorsCommand]}" Visibility="{Binding HasMoreErrors, Converter={StaticResource boolVisibility}}"/>
+                  </Grid>
+               </ScrollViewer>
+            </Border>
+         </Grid>
+
+         <!-- Log -->
+         <Grid Grid.Row="2" Visibility="{Binding IsLogTab, Converter={StaticResource boolVisibility}}">
+            <Grid.RowDefinitions>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <ScrollViewer Margin="22,0,22,10" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+               <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanBrowse}">
+                  <ComboBox Width="140" Margin="0,0,8,0" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding EventKinds}" SelectedValuePath="Value" SelectedValue="{Binding EventKind}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Kind"/>
+                  <ComboBox Width="190" Margin="0,0,8,0" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding EventLevels}" SelectedValuePath="Value" SelectedValue="{Binding EventLevel}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Level"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding EventCategory, UpdateSourceTrigger=PropertyChanged}" Tag="Category" ToolTip="Category prefix, e.g. Em.Api.Request" AutomationProperties.Name="Category"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Width="200" Text="{Binding EventText, UpdateSourceTrigger=PropertyChanged}" Tag="Text" ToolTip="Text contained in the message" AutomationProperties.Name="Text"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Width="210" Text="{Binding EventRequestId, UpdateSourceTrigger=PropertyChanged}" Tag="Request id" ToolTip="Every line of one request (exact id)" AutomationProperties.Name="Request id"/>
+                  <TextBox Style="{StaticResource filterBoxStyle}" Text="{Binding EventUser, UpdateSourceTrigger=PropertyChanged}" Tag="User id" ToolTip="User id (exact)" AutomationProperties.Name="User id"/>
+                  <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SearchEventsCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_MagnifyingGlass" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Search" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+                  <Border Style="{StaticResource logSeparatorStyle}"/>
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[OpenEventCommand]}">
+                     <StackPanel Orientation="Horizontal">
+                        <fa:FontAwesome Icon="Solid_Eye" Style="{StaticResource buttonIconStyle}"/>
+                        <TextBlock Text="Details" VerticalAlignment="Center"/>
+                     </StackPanel>
+                  </Button>
+               </StackPanel>
+            </ScrollViewer>
+            <Border Grid.Row="1" Margin="22,0,22,0" Style="{StaticResource cardStyle}" Padding="0">
+               <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                  <Grid MinWidth="980">
+                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                     </Grid.RowDefinitions>
+                     <Grid Margin="24,12,20,10">
+                        <Grid.ColumnDefinitions>
+                           <ColumnDefinition Width="150"/>
+                           <ColumnDefinition Width="90"/>
+                           <ColumnDefinition Width="180"/>
+                           <ColumnDefinition Width="110"/>
+                           <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="TIME" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="1" Text="LEVEL" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="2" Text="CATEGORY" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="3" Text="USER" Style="{StaticResource sectionCaptionStyle}"/>
+                        <TextBlock Grid.Column="4" Text="MESSAGE" Style="{StaticResource sectionCaptionStyle}"/>
+                     </Grid>
+                     <ListBox Grid.Row="1" ItemsSource="{Binding EventRows}" SelectedItem="{Binding SelectedEvent, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource logRowStyle}" BorderThickness="0" IsEnabled="{Binding CanBrowse}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" VirtualizingPanel.IsVirtualizing="True" AutomationProperties.Name="Log events">
+                        <ListBox.ItemTemplate>
+                           <DataTemplate>
+                              <Grid>
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="90"/>
+                                    <ColumnDefinition Width="180"/>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock Text="{Binding Time}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding Level}" Margin="0,0,12,0" VerticalAlignment="Center"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding Category}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Category}"/>
+                                 <TextBlock Grid.Column="3" Text="{Binding User}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                 <TextBlock Grid.Column="4" Text="{Binding Message}" FontFamily="Consolas" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Message}"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ListBox.ItemTemplate>
+                     </ListBox>
+                     <Button Grid.Row="2" Style="{StaticResource textButtonStyle}" Content="Load more" HorizontalAlignment="Left" Margin="20,6,0,10" Command="{Binding Commands[MoreEventsCommand]}" Visibility="{Binding HasMoreEvents, Converter={StaticResource boolVisibility}}"/>
+                  </Grid>
+               </ScrollViewer>
+            </Border>
+         </Grid>
+
+         <!-- Settings -->
+         <Grid Grid.Row="2" Visibility="{Binding IsSettingsTab, Converter={StaticResource boolVisibility}}">
+            <Grid.RowDefinitions>
+               <RowDefinition Height="Auto"/>
+               <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <StackPanel Orientation="Horizontal" Margin="22,0,22,10">
+               <ComboBox Width="170" Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding SettingsPanels}" SelectedValuePath="Value" SelectedValue="{Binding SettingsPanel}" ItemTemplate="{StaticResource optionTemplate}" IsEnabled="{Binding CanBrowse}" AutomationProperties.Name="Settings panel"/>
+            </StackPanel>
+
+            <!-- Settings > Database -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsDatabasePanel, Converter={StaticResource boolVisibility}}">
+               <StackPanel Margin="22,0,22,16">
+                  <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Margin="0,0,0,10">
+                     <StackPanel Orientation="Horizontal">
+                        <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SaveStoresCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_FloppyDisk" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Save" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Border Style="{StaticResource logSeparatorStyle}"/>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[AddStoreCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_Plus" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Add database" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[EditStoreCommand]}" Margin="8,0,0,0">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_Pen" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Edit" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[RemoveStoreCommand]}" Margin="8,0,0,0">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_TrashCan" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Remove from list" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                     </StackPanel>
+                  </ScrollViewer>
+                  <TextBlock Text="{Binding StoreNotice}" Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                  <Border Style="{StaticResource cardStyle}" Padding="0">
+                     <StackPanel>
+                        <TextBlock Text="STORES (SAVED)" Style="{StaticResource sectionCaptionStyle}" Margin="22,12,22,8"/>
+                        <ListBox ItemsSource="{Binding Stores}" SelectedItem="{Binding SelectedStore, Mode=TwoWay}" Style="{StaticResource surfaceListBoxStyle}" ItemContainerStyle="{StaticResource logRowStyle}" BorderThickness="0" Margin="0,0,0,8" IsEnabled="{Binding CanBrowse}" AutomationProperties.Name="Log stores">
+                           <ListBox.ItemTemplate>
+                              <DataTemplate>
+                                 <Grid>
+                                    <Grid.ColumnDefinitions>
+                                       <ColumnDefinition Width="200"/>
+                                       <ColumnDefinition Width="90"/>
+                                       <ColumnDefinition Width="*"/>
+                                       <ColumnDefinition Width="300"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" Margin="0,0,12,0" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Role}" Margin="0,0,12,0"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Location}" Margin="0,0,12,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding Location}"/>
+                                    <TextBlock Grid.Column="3" Text="{Binding Range}" Style="{StaticResource fieldHelpStyle}" TextTrimming="CharacterEllipsis"/>
+                                 </Grid>
+                              </DataTemplate>
+                           </ListBox.ItemTemplate>
+                        </ListBox>
+                     </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource cardStyle}" Padding="22,12,22,12" Margin="0,12,0,0">
+                     <StackPanel>
+                        <TextBlock Text="ACTIVE NOW" Style="{StaticResource sectionCaptionStyle}"/>
+                        <ItemsControl ItemsSource="{Binding ActiveStores}" Margin="0,8,0,0">
+                           <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                 <Grid Margin="0,2">
+                                    <Grid.ColumnDefinitions>
+                                       <ColumnDefinition Width="200"/>
+                                       <ColumnDefinition Width="90"/>
+                                       <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Role}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Location}" TextTrimming="CharacterEllipsis"/>
+                                 </Grid>
+                              </DataTemplate>
+                           </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="Changing stores applies after the API restarts. Data is not moved: keep the old store as a Read store to keep its data searchable." Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                     </StackPanel>
+                  </Border>
+               </StackPanel>
+            </ScrollViewer>
+
+            <!-- Settings > Retention -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsRetentionPanel, Converter={StaticResource boolVisibility}}">
+               <StackPanel Margin="22,0,22,16">
+                  <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                     <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[SaveRetentionCommand]}">
+                        <StackPanel Orientation="Horizontal">
+                           <fa:FontAwesome Icon="Solid_FloppyDisk" Style="{StaticResource buttonIconStyle}"/>
+                           <TextBlock Text="Save" VerticalAlignment="Center"/>
+                        </StackPanel>
+                     </Button>
+                     <Border Style="{StaticResource logSeparatorStyle}"/>
+                     <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[PreviewRetentionCommand]}">
+                        <StackPanel Orientation="Horizontal">
+                           <fa:FontAwesome Icon="Solid_MagnifyingGlass" Style="{StaticResource buttonIconStyle}"/>
+                           <TextBlock Text="Preview" VerticalAlignment="Center"/>
+                        </StackPanel>
+                     </Button>
+                  </StackPanel>
+                  <TextBlock Text="{Binding RetentionLastRun}" Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                  <Border Style="{StaticResource cardStyle}" Padding="22,12,22,16" IsEnabled="{Binding CanBrowse}">
+                     <StackPanel>
+                        <TextBlock Text="TELEMETRY" Style="{StaticResource sectionCaptionStyle}"/>
+                        <Grid Margin="0,10,0,0">
+                           <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="16"/>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="16"/>
+                              <ColumnDefinition Width="*"/>
+                           </Grid.ColumnDefinitions>
+                           <StackPanel Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Days Trace, Debug and Information events are kept (at least 1).">
+                              <TextBlock Text="Information (days)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <controls:NumericBox Style="{StaticResource fieldNumericBoxStyle}" Minimum="1" Maximum="3650" Value="{Binding Retention.InformationDays}"/>
+                           </StackPanel>
+                           <StackPanel Grid.Column="2" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Days Warning events are kept (at least 1).">
+                              <TextBlock Text="Warning (days)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <controls:NumericBox Style="{StaticResource fieldNumericBoxStyle}" Minimum="1" Maximum="3650" Value="{Binding Retention.WarningDays}"/>
+                           </StackPanel>
+                           <StackPanel Grid.Column="4" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Days Error and Critical events are kept (at least 1).">
+                              <TextBlock Text="Error (days)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <controls:NumericBox Style="{StaticResource fieldNumericBoxStyle}" Minimum="1" Maximum="3650" Value="{Binding Retention.ErrorDays}"/>
+                           </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,14,0,0">
+                           <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="16"/>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="16"/>
+                              <ColumnDefinition Width="*"/>
+                           </Grid.ColumnDefinitions>
+                           <StackPanel Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Days request lines (DONE, ABORT, REJECT) are kept (at least 1).">
+                              <TextBlock Text="Access (days)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <controls:NumericBox Style="{StaticResource fieldNumericBoxStyle}" Minimum="1" Maximum="3650" Value="{Binding Retention.AccessDays}"/>
+                           </StackPanel>
+                           <StackPanel Grid.Column="2" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="An error group is deleted this many days after it was last seen (at least 30).">
+                              <TextBlock Text="Error groups (days)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <controls:NumericBox Style="{StaticResource fieldNumericBoxStyle}" Minimum="30" Maximum="3650" Value="{Binding Retention.ErrorGroupDays}"/>
+                           </StackPanel>
+                           <StackPanel Grid.Column="4" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Total size limit of telemetry in GB; the oldest events are deleted above it. Empty means no limit. The size is estimated from the number of rows.">
+                              <TextBlock Text="Size limit (GB)" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding RetentionMaxGb, UpdateSourceTrigger=PropertyChanged}" shared:NumericInput.Kind="Decimal"/>
+                           </StackPanel>
+                        </Grid>
+                        <StackPanel Margin="0,14,0,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Hour of the day (server local time, 0-23) the daily job runs.">
+                           <TextBlock Text="Run at hour" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                           <controls:NumericBox Width="120" HorizontalAlignment="Left" Style="{StaticResource fieldNumericBoxStyle}" Minimum="0" Maximum="23" Value="{Binding Retention.RunHour}"/>
+                        </StackPanel>
+                     </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource cardStyle}" Padding="22,12,22,16" Margin="0,12,0,0" IsEnabled="{Binding CanBrowse}">
+                     <StackPanel>
+                        <TextBlock Text="AUDIT (MONTHS PER GROUP)" Style="{StaticResource sectionCaptionStyle}"/>
+                        <ItemsControl ItemsSource="{Binding RetentionGroups}" Margin="0,8,0,0">
+                           <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                 <Grid Margin="0,3">
+                                    <Grid.ColumnDefinitions>
+                                       <ColumnDefinition Width="220"/>
+                                       <ColumnDefinition Width="110"/>
+                                       <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Group}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    <TextBox Grid.Column="1" Style="{StaticResource fieldBoxStyle}" Text="{Binding Months, UpdateSourceTrigger=PropertyChanged}" shared:NumericInput.Kind="Integer" ToolTip="{Binding Help}" AutomationProperties.Name="{Binding Group}"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding Help}" Style="{StaticResource fieldHelpStyle}" Margin="12,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                 </Grid>
+                              </DataTemplate>
+                           </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                     </StackPanel>
+                  </Border>
+                  <Border Style="{StaticResource cardStyle}" Padding="22,12,22,16" Margin="0,12,0,0">
+                     <StackPanel>
+                        <TextBlock Text="PREVIEW" Style="{StaticResource sectionCaptionStyle}"/>
+                        <ItemsControl ItemsSource="{Binding RetentionPreview}" Margin="0,8,0,0">
+                           <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                 <Grid Margin="0,2">
+                                    <Grid.ColumnDefinitions>
+                                       <ColumnDefinition Width="260"/>
+                                       <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Scope}"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding Rows, StringFormat={}{0:N0} rows}"/>
+                                 </Grid>
+                              </DataTemplate>
+                           </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                     </StackPanel>
+                  </Border>
+               </StackPanel>
+            </ScrollViewer>
+         </Grid>
+
+         <TextBlock Grid.Row="3" Text="{Binding Status}" Margin="22,8,22,14" Style="{StaticResource fieldHelpStyle}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+      </Grid>
+
+      <!-- Side sheet -->
+      <Border Background="{StaticResource surfaceStrongBrush}" Visibility="{Binding IsSheetOpen, Converter={StaticResource boolVisibility}}"/>
+      <Border Width="620" MaxWidth="{Binding ActualWidth, ElementName=logRoot}" HorizontalAlignment="Right" Background="{DynamicResource themeWindowBackgroundBrush}" BorderBrush="{StaticResource outlineBrush}" BorderThickness="1,0,0,0" Visibility="{Binding IsSheetOpen, Converter={StaticResource boolVisibility}}">
+         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,0,0,8">
+            <StackPanel>
+               <!-- Audit entry -->
+               <Border Style="{StaticResource cardStyle}" Padding="22,16" Visibility="{Binding IsAuditSheetOpen, Converter={StaticResource boolVisibility}}">
+                  <StackPanel>
+                     <TextBlock Text="AUDIT ENTRY" Style="{StaticResource sectionCaptionStyle}"/>
+                     <ItemsControl ItemsSource="{Binding AuditDetail}" ItemTemplate="{StaticResource lineTemplate}" Margin="0,8,0,0"/>
+                     <TextBlock Text="CHANGES" Style="{StaticResource sectionCaptionStyle}" Margin="0,14,0,6"/>
+                     <ItemsControl ItemsSource="{Binding AuditChanges}">
+                        <ItemsControl.ItemTemplate>
+                           <DataTemplate>
+                              <Grid Margin="0,2">
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="*"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock TextTrimming="CharacterEllipsis" ToolTip="{Binding Field}">
+                                    <Run Text="{Binding Row, Mode=OneWay}"/> <Run Text="{Binding Label, Mode=OneWay}"/>
+                                 </TextBlock>
+                                 <TextBlock Grid.Column="1" TextWrapping="Wrap">
+                                    <Run Text="{Binding Old, Mode=OneWay}"/> <Run Text="{Binding OldText, Mode=OneWay}"/> <Run Text="&#x2192;"/> <Run Text="{Binding New, Mode=OneWay}"/> <Run Text="{Binding NewText, Mode=OneWay}"/>
+                                 </TextBlock>
+                              </Grid>
+                           </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                     </ItemsControl>
+                     <TextBlock Text="SNAPSHOT" Style="{StaticResource sectionCaptionStyle}" Margin="0,14,0,6"/>
+                     <TextBox Text="{Binding AuditSnapshot, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="NoWrap" MaxHeight="320" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Style="{StaticResource fieldBoxStyle}" Height="Auto" Padding="6"/>
+                     <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[ViewRequestCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_ListUl" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="View request" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[CloseSheetCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Close"/>
+                        </Button>
+                     </StackPanel>
+                  </StackPanel>
+               </Border>
+
+               <!-- Event -->
+               <Border Style="{StaticResource cardStyle}" Padding="22,16" Visibility="{Binding IsEventSheetOpen, Converter={StaticResource boolVisibility}}">
+                  <StackPanel>
+                     <TextBlock Text="LOG EVENT" Style="{StaticResource sectionCaptionStyle}"/>
+                     <ItemsControl ItemsSource="{Binding EventDetail}" ItemTemplate="{StaticResource lineTemplate}" Margin="0,8,0,0"/>
+                     <TextBlock Text="EXCEPTION" Style="{StaticResource sectionCaptionStyle}" Margin="0,14,0,6"/>
+                     <TextBox Text="{Binding EventException, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="NoWrap" MaxHeight="360" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Style="{StaticResource fieldBoxStyle}" Height="Auto" Padding="6"/>
+                     <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[FilterRequestCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_ListUl" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Whole request" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[CloseSheetCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Close"/>
+                        </Button>
+                     </StackPanel>
+                  </StackPanel>
+               </Border>
+
+               <!-- Error group -->
+               <Border Style="{StaticResource cardStyle}" Padding="22,16" Visibility="{Binding IsErrorSheetOpen, Converter={StaticResource boolVisibility}}">
+                  <StackPanel>
+                     <TextBlock Text="ERROR GROUP" Style="{StaticResource sectionCaptionStyle}"/>
+                     <TextBlock Text="{Binding ErrorDetail.Group.ExceptionType}" Style="{StaticResource typeTitleMediumStyle}" Margin="0,8,0,2" TextWrapping="Wrap"/>
+                     <TextBlock Text="{Binding ErrorDetail.Group.SampleMessage}" TextWrapping="Wrap"/>
+                     <TextBlock Style="{StaticResource fieldHelpStyle}" Margin="0,6,0,0" TextWrapping="Wrap">
+                        <Run Text="{Binding ErrorDetail.Group.Count, Mode=OneWay, StringFormat='{}{0:N0} times;'}"/>
+                        <Run Text="{Binding ErrorDetail.Group.AffectedUsers, Mode=OneWay, StringFormat='{}{0:N0} users; state'}"/>
+                        <Run Text="{Binding ErrorDetail.Group.State, Mode=OneWay}"/>
+                     </TextBlock>
+                     <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[SetErrorStateCommand]}" CommandParameter="{x:Static local:LogManager.Acknowledged}" Content="Acknowledge"/>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[SetErrorStateCommand]}" CommandParameter="{x:Static local:LogManager.Resolved}" Content="Resolved" Margin="8,0,0,0"/>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[SetErrorStateCommand]}" CommandParameter="{x:Static local:LogManager.Ignored}" Content="Ignore" Margin="8,0,0,0"/>
+                        <Button Style="{StaticResource textButtonStyle}" Command="{Binding Commands[SetErrorStateCommand]}" CommandParameter="{x:Static local:LogManager.New}" Content="Reopen" Margin="8,0,0,0"/>
+                     </StackPanel>
+                     <TextBlock Text="STACK TRACE (LATEST)" Style="{StaticResource sectionCaptionStyle}" Margin="0,14,0,6"/>
+                     <TextBox Text="{Binding ErrorStack, Mode=OneWay}" IsReadOnly="True" FontFamily="Consolas" TextWrapping="NoWrap" MaxHeight="320" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" Style="{StaticResource fieldBoxStyle}" Height="Auto" Padding="6"/>
+                     <TextBlock Text="LATEST OCCURRENCES" Style="{StaticResource sectionCaptionStyle}" Margin="0,14,0,6"/>
+                     <ItemsControl ItemsSource="{Binding ErrorRecent}">
+                        <ItemsControl.ItemTemplate>
+                           <DataTemplate>
+                              <Grid Margin="0,2">
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="150"/>
+                                    <ColumnDefinition Width="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock Text="{Binding Time}"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding User}" TextTrimming="CharacterEllipsis"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding Source}" TextTrimming="CharacterEllipsis"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                     </ItemsControl>
+                     <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[CloseSheetCommand]}" HorizontalAlignment="Left" Margin="0,16,0,0">
+                        <TextBlock Text="Close"/>
+                     </Button>
+                  </StackPanel>
+               </Border>
+
+               <!-- Store editor -->
+               <Border Style="{StaticResource cardStyle}" Padding="22,16" Visibility="{Binding IsStoreEditorOpen, Converter={StaticResource boolVisibility}}">
+                  <StackPanel IsEnabled="{Binding CanEdit}">
+                     <TextBlock Text="LOG STORE" Style="{StaticResource sectionCaptionStyle}"/>
+                     <TextBlock Text="Name" Style="{StaticResource fieldLabelStyle}" Margin="0,10,0,4"/>
+                     <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding StoreDraft.Name, UpdateSourceTrigger=PropertyChanged}" MaxLength="100"/>
+                     <TextBlock Text="Where" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Kinds}" SelectedValuePath="Value" SelectedValue="{Binding StoreDraftKind}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Where"/>
+                     <TextBlock Text="Role" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Roles}" SelectedValuePath="Value" SelectedValue="{Binding StoreDraft.Role}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Role"/>
+                     <StackPanel Visibility="{Binding StoreDraftIsConnection, Converter={StaticResource boolVisibility}}">
+                        <TextBlock Text="Provider" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                        <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Providers}" SelectedValuePath="Value" SelectedValue="{Binding StoreDraft.Provider}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Provider"/>
+                        <Grid Margin="0,14,0,0">
+                           <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*"/>
+                              <ColumnDefinition Width="12"/>
+                              <ColumnDefinition Width="110"/>
+                           </Grid.ColumnDefinitions>
+                           <StackPanel>
+                              <TextBlock Text="Server" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding StoreDraft.Server, UpdateSourceTrigger=PropertyChanged}" Tag="db.example.local"/>
+                           </StackPanel>
+                           <StackPanel Grid.Column="2" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTip="Empty uses the provider's default port.">
+                              <TextBlock Text="Port" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
+                              <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding StoreDraftPort, UpdateSourceTrigger=PropertyChanged}" shared:NumericInput.Kind="Integer"/>
+                           </StackPanel>
+                        </Grid>
+                        <TextBlock Text="Database" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                        <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding StoreDraft.Database, UpdateSourceTrigger=PropertyChanged}" Tag="em_log"/>
+                        <CheckBox Style="{StaticResource checkBoxStyle}" Content="Windows authentication (SQL Server only)" IsChecked="{Binding StoreDraft.IntegratedSecurity}" Margin="0,14,0,0"/>
+                        <TextBlock Text="Runtime user" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                        <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding StoreDraft.User, UpdateSourceTrigger=PropertyChanged}"/>
+                        <TextBlock Text="Runtime password" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                        <PasswordBox x:Name="storePassword" Style="{StaticResource fieldPasswordStyle}" PasswordChanged="OnStorePasswordChanged" AutomationProperties.Name="Runtime password"/>
+                        <TextBlock Text="Leave empty to keep the stored password. It is stored encrypted and never shown again." Style="{StaticResource fieldHelpStyle}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        <CheckBox Style="{StaticResource checkBoxStyle}" Content="Encrypt the connection" IsChecked="{Binding StoreDraft.Encrypt}" Margin="0,14,0,0"/>
+                        <CheckBox Style="{StaticResource checkBoxStyle}" Content="Trust the server certificate" IsChecked="{Binding StoreDraft.TrustServerCertificate}" Margin="0,8,0,0"/>
+                     </StackPanel>
+                     <TextBlock Text="{Binding StoreTestText}" Style="{StaticResource fieldHelpStyle}" Margin="0,12,0,0" TextWrapping="Wrap"/>
+                     <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                        <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[ApplyStoreCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_Check" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Apply" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[TestStoreCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Test"/>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[OpenPrepareCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Prepare..."/>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[CloseSheetCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Cancel"/>
+                        </Button>
+                     </StackPanel>
+                  </StackPanel>
+               </Border>
+
+               <!-- Prepare -->
+               <Border Style="{StaticResource cardStyle}" Padding="22,16" Visibility="{Binding IsPrepareOpen, Converter={StaticResource boolVisibility}}">
+                  <StackPanel IsEnabled="{Binding CanEdit}">
+                     <TextBlock Text="PREPARE THE STORE" Style="{StaticResource sectionCaptionStyle}"/>
+                     <TextBlock Text="Creates or upgrades the store tables with an owner account. The owner credential is used once and never stored." Style="{StaticResource fieldHelpStyle}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                     <TextBlock Text="Owner user" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                     <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding PrepareOwnerUser, UpdateSourceTrigger=PropertyChanged}" Tag="Empty = Windows authentication"/>
+                     <TextBlock Text="Owner password" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                     <PasswordBox x:Name="ownerPassword" Style="{StaticResource fieldPasswordStyle}" PasswordChanged="OnOwnerPasswordChanged" AutomationProperties.Name="Owner password"/>
+                     <CheckBox Style="{StaticResource checkBoxStyle}" Content="Create the database when it does not exist" IsChecked="{Binding PrepareCreateDatabase}" Margin="0,14,0,0"/>
+                     <CheckBox Style="{StaticResource checkBoxStyle}" Content="Grant the runtime user read/write rights (no DDL)" IsChecked="{Binding PrepareGrantRuntime}" Margin="0,8,0,0"/>
+                     <ItemsControl ItemsSource="{Binding PrepareSteps}" Margin="0,12,0,0">
+                        <ItemsControl.ItemTemplate>
+                           <DataTemplate>
+                              <Grid Margin="0,2">
+                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="140"/>
+                                    <ColumnDefinition Width="70"/>
+                                    <ColumnDefinition Width="*"/>
+                                 </Grid.ColumnDefinitions>
+                                 <TextBlock Text="{Binding Name}"/>
+                                 <TextBlock Grid.Column="1" Text="{Binding Status}"/>
+                                 <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap"/>
+                              </Grid>
+                           </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                     </ItemsControl>
+                     <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                        <Button Style="{StaticResource filledButtonStyle}" Command="{Binding Commands[RunPrepareCommand]}">
+                           <StackPanel Orientation="Horizontal">
+                              <fa:FontAwesome Icon="Solid_Play" Style="{StaticResource buttonIconStyle}"/>
+                              <TextBlock Text="Prepare" VerticalAlignment="Center"/>
+                           </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[ClosePrepareCommand]}" Margin="8,0,0,0">
+                           <TextBlock Text="Back"/>
+                        </Button>
+                     </StackPanel>
+                  </StackPanel>
+               </Border>
+            </StackPanel>
+         </ScrollViewer>
+      </Border>
+      <controls:WaitOverlay IsWaiting="{Binding InWaiting}" Caption="{Binding WaiterText}"/>
+   </Grid>
+</UserControl>

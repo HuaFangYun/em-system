@@ -22,10 +22,18 @@
     "taskCachePath": "./data/tasks",
     "nuPakPath": "./data/nuget",
     "nuPakMaxPackageMb": 250,
-    "binaryPath": "./data/binary"
+    "binaryPath": "./data/binary",
+    "logPath": "./data/logs"
+  },
+  // Log engine (AddLogServer). The store itself is chosen in Log Manager > Settings > Database.
+  "log": {
+    "storeRequestStartLines": false,
+    "queueCapacity": 20000,
+    "outboxMaxMb": 500
   },
   // Optional modules; one that is not mentioned is off. Can be overridden by EM_MODULE_<NAME>=true|false (e.g. EM_MODULE_TEST).
   "modules": {
-    "test": false
+    "test": false,
+    "logServer": true
   }
 }

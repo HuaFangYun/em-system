@@ -2122,12 +2122,12 @@
                     when", which is the question a record like this gets
                     asked most often after something goes wrong.
                     ===================================================== -->
-               <!-- Hidden until it is built: the entries below are a static design mock-up with
-                    made-up data, not the account's history. Disabled as well, so keyboard
-                    navigation between tabs cannot land on it. -->
-               <TabItem Header="Activity" Visibility="Collapsed" IsEnabled="False">
+               <!-- Filled from the audit (System.User, System.Auth, System.Password) when the tab is first shown;
+                    hidden for a record that is not stored yet. -->
+               <TabItem Header="Activity" Visibility="{Binding IsStored, Converter={StaticResource boolToVisibility}}"
+                        IsSelected="{Binding Activity.IsActive, Mode=TwoWay}">
                   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                     <StackPanel Margin="24,0,24,26">
+                     <StackPanel Margin="24,0,24,26" DataContext="{Binding Activity}">
 
                         <Grid Margin="0,22,0,14">
                            <Grid.ColumnDefinitions>
@@ -2137,106 +2137,62 @@
                            <TextBlock Grid.Column="0" Text="RECENT ACTIVITY"
                                       Style="{StaticResource sectionCaptionStyle}" Margin="0"
                                       VerticalAlignment="Center" />
-                           <ComboBox Grid.Column="1" Style="{StaticResource fieldComboStyle}"
-                                     Height="34" MinWidth="150" SelectedIndex="0" FontSize="12">
-                              <ComboBoxItem Content="Last 30 days" />
-                              <ComboBoxItem Content="Last 90 days" />
-                              <ComboBoxItem Content="Everything" />
-                           </ComboBox>
+                           <Button Grid.Column="1" Style="{StaticResource rowActionButtonStyle}"
+                                   Command="{Binding Commands[ReloadCommand]}" ToolTip="Reload"
+                                   AutomationProperties.Name="Reload activity">
+                              <fa:FontAwesome Icon="Solid_ArrowsRotate" FontSize="13" />
+                           </Button>
                         </Grid>
 
-                        <!-- entry 1 -->
-                        <Grid>
-                           <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="22" />
-                              <ColumnDefinition Width="*" />
-                           </Grid.ColumnDefinitions>
-                           <Grid Grid.Column="0">
-                              <Border Style="{StaticResource timelineRuleStyle}" />
-                              <Border Style="{StaticResource timelineDotStyle}"
-                                      Background="{DynamicResource themeAccentBrush}" />
-                           </Grid>
-                           <StackPanel Grid.Column="1" Margin="12,0,0,22">
-                              <TextBlock Text="Role changed to Sales Manager" Style="{StaticResource primaryTextStyle}"
-                                         FontWeight="SemiBold" />
-                              <TextBlock Text="09 Sep 2026, 09:14 - by Budi Santoso"
-                                         Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" />
-                           </StackPanel>
-                        </Grid>
+                        <TextBlock Text="{Binding Message}" Style="{StaticResource secondaryTextStyle}" TextWrapping="Wrap"
+                                   Margin="0,0,0,12" Visibility="{Binding HasMessage, Converter={StaticResource boolToVisibility}}" />
+                        <TextBlock Text="No activity recorded for this account yet." Style="{StaticResource secondaryTextStyle}"
+                                   Visibility="{Binding IsEmpty, Converter={StaticResource boolToVisibility}}" />
 
-                        <!-- entry 2 -->
-                        <Grid>
-                           <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="22" />
-                              <ColumnDefinition Width="*" />
-                           </Grid.ColumnDefinitions>
-                           <Grid Grid.Column="0">
-                              <Border Style="{StaticResource timelineRuleStyle}" />
-                              <Border Style="{StaticResource timelineDotStyle}" />
-                           </Grid>
-                           <StackPanel Grid.Column="1" Margin="12,0,0,22">
-                              <TextBlock Text="Signed in from Em Desktop" Style="{StaticResource primaryTextStyle}" />
-                              <TextBlock Text="09 Sep 2026, 08:41 - 192.0.2.24, Jakarta"
-                                         Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" />
-                           </StackPanel>
-                        </Grid>
-
-                        <!-- entry 3 -->
-                        <Grid>
-                           <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="22" />
-                              <ColumnDefinition Width="*" />
-                           </Grid.ColumnDefinitions>
-                           <Grid Grid.Column="0">
-                              <Border Style="{StaticResource timelineRuleStyle}" />
-                              <Border Style="{StaticResource timelineDotStyle}"
-                                      Background="{StaticResource warningBrush}" />
-                           </Grid>
-                           <StackPanel Grid.Column="1" Margin="12,0,0,22">
-                              <TextBlock Text="Password reset link sent" Style="{StaticResource primaryTextStyle}" />
-                              <TextBlock Text="02 Sep 2026, 11:07 - by Budi Santoso"
-                                         Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" />
-                           </StackPanel>
-                        </Grid>
-
-                        <!-- entry 4 -->
-                        <Grid>
-                           <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="22" />
-                              <ColumnDefinition Width="*" />
-                           </Grid.ColumnDefinitions>
-                           <Grid Grid.Column="0">
-                              <Border Style="{StaticResource timelineRuleStyle}" />
-                              <Border Style="{StaticResource timelineDotStyle}"
-                                      Background="{StaticResource dangerBrush}" />
-                           </Grid>
-                           <StackPanel Grid.Column="1" Margin="12,0,0,22">
-                              <TextBlock Text="Three failed sign-in attempts" Style="{StaticResource primaryTextStyle}" />
-                              <TextBlock Text="28 Aug 2026, 22:19 - 198.51.100.9, Bandung"
-                                         Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" />
-                           </StackPanel>
-                        </Grid>
-
-                        <!-- The last entry drops the rule: there is nothing under it for
-                             the line to reach. -->
-                        <Grid>
-                           <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="22" />
-                              <ColumnDefinition Width="*" />
-                           </Grid.ColumnDefinitions>
-                           <Border Grid.Column="0" Style="{StaticResource timelineDotStyle}"
-                                   Background="{StaticResource successBrush}" />
-                           <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                              <TextBlock Text="Account created" Style="{StaticResource primaryTextStyle}" />
-                              <TextBlock Text="14 Feb 2025, 10:02 - by Budi Santoso"
-                                         Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" />
-                           </StackPanel>
-                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Items}">
+                           <ItemsControl.ItemTemplate>
+                              <DataTemplate>
+                                 <Grid>
+                                    <Grid.ColumnDefinitions>
+                                       <ColumnDefinition Width="22" />
+                                       <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid Grid.Column="0">
+                                       <Border Style="{StaticResource timelineRuleStyle}" />
+                                       <Border>
+                                          <Border.Style>
+                                             <Style TargetType="Border" BasedOn="{StaticResource timelineDotStyle}">
+                                                <Setter Property="Background" Value="{DynamicResource themeAccentBrush}" />
+                                                <Style.Triggers>
+                                                   <DataTrigger Binding="{Binding IsSuccess}" Value="True">
+                                                      <Setter Property="Background" Value="{StaticResource successBrush}" />
+                                                   </DataTrigger>
+                                                   <DataTrigger Binding="{Binding IsWarning}" Value="True">
+                                                      <Setter Property="Background" Value="{StaticResource warningBrush}" />
+                                                   </DataTrigger>
+                                                   <DataTrigger Binding="{Binding IsDanger}" Value="True">
+                                                      <Setter Property="Background" Value="{StaticResource dangerBrush}" />
+                                                   </DataTrigger>
+                                                </Style.Triggers>
+                                             </Style>
+                                          </Border.Style>
+                                       </Border>
+                                    </Grid>
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,22">
+                                       <TextBlock Text="{Binding Title}" Style="{StaticResource primaryTextStyle}" TextWrapping="Wrap" />
+                                       <TextBlock Text="{Binding Subtitle}" Style="{StaticResource secondaryTextStyle}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                 </Grid>
+                              </DataTemplate>
+                           </ItemsControl.ItemTemplate>
+                        </ItemsControl>
 
                         <Button Style="{StaticResource outlinedButtonStyle}"
                                 Margin="0,20,0,0"
                                 HorizontalAlignment="Left"
-                                Content="Load older activity" />
+                                Content="Load older activity"
+                                Command="{Binding Commands[LoadMoreCommand]}"
+                                Visibility="{Binding HasMore, Converter={StaticResource boolToVisibility}}" />
                      </StackPanel>
                   </ScrollViewer>
                </TabItem>

@@ -25,6 +25,8 @@ public static class Extensions
    /// <summary>Configures a context's options for the given database provider and connection string.</summary>
    public static void UseEmProvider(this DbContextOptionsBuilder opt, DatabaseProvider provider,
       string connectionString) {
+      // Lets audit entries parked through IAuditWriter join the transaction of whatever context saves next.
+      opt.AddInterceptors(Em.Api.Core.Log.Audit.AuditSaveInterceptor.Instance);
       switch (provider) {
          case DatabaseProvider.MicrosoftSqlServer:
             opt.UseSqlServer(connectionString);

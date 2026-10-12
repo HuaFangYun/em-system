@@ -25,7 +25,7 @@ using HttpMethod = Em.Shared.HttpMethod;
 namespace Em.Api.Core
 {
    /// <summary>The application host: builds the web application, registers engine services, and dispatches actions.</summary>
-   public class EmApp : IEmApp
+   public partial class EmApp : IEmApp
    {
       /// <summary>
       /// Builds the host: creates the web application, registers the engine services, runs the module
@@ -56,6 +56,7 @@ namespace Em.Api.Core
          appBuilder(builder);
          app.ApplyProxyHeaderRegistration(builder);
          app.ApplyDbContextRegistrations(builder);
+         app.ApplyLogRegistration(builder);
          app.ApplyStorageSettingsRegistration(builder);
          app.ApplyNuPakRegistration(builder);
          app.ApplyCdnRegistration(builder);
@@ -526,6 +527,9 @@ namespace Em.Api.Core
          // Recorded first, even before the identity gate: a request that is later refused must still show
          // that it arrived, because that is exactly what is looked for when someone is knocking from outside.
          var trace = RequestTrace.Begin(http, routeLabel);
+         // Every log line written while this request runs carries its request id, so the log engine can string
+         // module lines together with the IN/DONE lines of the request.
+         using var requestScope = trace.BeginRequestScope();
 
          // The request quota is checked before the identity gate, and therefore before any query runs: when
          // a flood really arrives, the last thing that should happen is every request in it burdening the
@@ -545,6 +549,7 @@ namespace Em.Api.Core
          // a refused request.
          http.Items[RequestItemKey] = gate.Request;
          trace.Identified(gate.Request);
+         using var identityScope = trace.BeginIdentityScope();
 
          if (gate.Rejection is { } rejection) {
             return Reject(rejection);
@@ -674,6 +679,15 @@ namespace Em.Api.Core
             }
 
             trace.Completed(outcome.Result!);
+
+            // Only a successful action can have forgotten its SaveChanges; a failed one rolled its entries back.
+            if (outcome.Result!.ValidResult) ReportUnsavedAudit(http, routeLabel);
+
+            // A fault the action did not explain itself is an error worth grouping: the exception goes to the log
+            // (and so to the error groups of the log engine), never to the caller outside Development.
+            if (outcome.Fault is { } fault) {
+               service.Logger.LogError(fault, "Action {Route} failed: {Reason}", routeLabel, fault.Message);
+            }
 
             // The time budget of a GET covered the action only up to here, where it handed its stream
             // over: the linked source above is disposed as soon as this method returns, so copying the
@@ -978,12 +992,16 @@ namespace Em.Api.Core
 
          CallerGate Accepted(ActionRequest resolved) {
             // During impersonation, the data rows written carry the impersonated account's trace and cannot be
-            // told apart from real work. Until an audit system exists, this log line is the only trace that the
-            // one who did it was actually a developer.
+            // told apart from real work. The audit entries written in this request record the debug key as their
+            // actor; this line and the System.Auth entry below record that the key was used at all.
             logger.LogWarning(
                "Debug token '{Key}' from {Caller} accepted for '{Route}', acting as '{Account}' ({UserId}, admin: {IsAdmin}).",
                keyName, CallerAddress(http), resolved.RouteLabel, resolved.cUserAccount, resolved.cUserId,
                resolved.IsAdmin);
+            if (DebugAuditDue(keyName, resolved.cUserId)) {
+               TryAuditAsync(http, a => a.DebugAcceptedAsync(keyName, resolved.cUserId!, resolved.cUserAccount, resolved.IsImpersonating))
+                  .GetAwaiter().GetResult();
+            }
             return new CallerGate(resolved, null);
          }
 
@@ -1014,6 +1032,12 @@ namespace Em.Api.Core
          if (!validation.IsValid) {
             logger.LogWarning("Access token presented for '{Route}' from {Caller} was not accepted: {Reason}",
                request.RouteLabel, CallerAddress(http), validation.Error ?? "no reason given");
+            // An expired token or a signed-out session is routine (the client refreshes); anything else - a bad
+            // signature, a forged or broken token - is a security event.
+            if (validation.Error is { } reason && !reason.Contains("Lifetime", StringComparison.OrdinalIgnoreCase) &&
+                !reason.Contains("no longer active", StringComparison.OrdinalIgnoreCase)) {
+               await TryAuditAsync(http, a => a.TokenRejectedAsync(reason));
+            }
             return new CallerGate(request, null);
          }
 
@@ -1384,7 +1408,8 @@ namespace Em.Api.Core
       /// successfully: what is sent is then the stream content, and <see cref="Result"/> is used only for the
       /// request trace.
       /// </remarks>
-      private readonly record struct ActionOutcome(ActionResult? Result, AbortReason? Abort, Stream? Content = null);
+      private readonly record struct ActionOutcome(ActionResult? Result, AbortReason? Abort, Stream? Content = null,
+         Exception? Fault = null);
 
       private static async Task<ActionOutcome> InvokeAsync(object service, MethodInfo method, object?[] arguments,
          Type serviceType, string serviceAction, bool includeStackTrace, CancellationToken callerGone,
@@ -1454,7 +1479,7 @@ namespace Em.Api.Core
 
             return new ActionOutcome(
                BuildErrorActionResult(actualException, statusCode, serviceType, serviceAction, includeStackTrace),
-               null);
+               null, null, statusCode >= 500 ? actualException : null);
          }
       }
 

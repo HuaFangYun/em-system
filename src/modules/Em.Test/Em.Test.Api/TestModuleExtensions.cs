@@ -18,6 +18,9 @@ namespace Em.Test.Api
 
          builder.AddDbContext<TestDbContext>();
          builder.AddService<ITestServices, TestServices>();
+         // Audit example (see TestAudit); without AddLogServer the entries are discarded.
+         TestAudit.Register(builder);
+         builder.AddScoped<TestAudit>();
 
          // Claims first: the approval flows below register theirs only when the name is still free, so
          // the claim of the data approval ("Approve Item Change") is left to the flow on purpose.

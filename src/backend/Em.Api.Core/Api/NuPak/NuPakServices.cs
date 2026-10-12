@@ -19,7 +19,11 @@ public sealed partial class NuPakServices(NuPakDbContext db, NuPakStore store, N
    /// <inheritdoc />
    [PostAction(claim: INuPakServices.SettingsClaim)] public Task<StorageDirectoryValidation> PostGetMeta_NuPakValidateDirectory(StorageFeatureSettings draft) => Task.FromResult(Storage.Validate(2,draft));
    /// <inheritdoc />
-   [PostAction(claim: INuPakServices.SettingsClaim)] public Task<StorageSettingsDetail> PostGetMeta_NuPakSettingsSave(StorageSettingsSave request) => Task.FromResult(Storage.Save(2,request));
+   [PostAction(claim: INuPakServices.SettingsClaim)] public async Task<StorageSettingsDetail> PostGetMeta_NuPakSettingsSave(StorageSettingsSave request) {
+      var saved = Storage.Save(2, request);
+      await AuditSystemAsync("System.Settings", "nuget", "storage.changed", "Changed NuGet storage settings", "settings", request.Settings);
+      return saved;
+   }
    private NuPakActor Actor => new("User", CallerUserId, Request.cUserAccount ?? Request.DebugKeyName ?? "Unknown user", HttpContext?.Connection.RemoteIpAddress?.ToString());
    /// <inheritdoc />
    [GetAction(claim: INuPakServices.ManagerClaim)]

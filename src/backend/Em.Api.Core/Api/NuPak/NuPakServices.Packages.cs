@@ -48,7 +48,10 @@ public sealed partial class NuPakServices
    public Task PostMeta_NuPakVersionRestore(string feedId, string versionId) => NuPakOperations.ChangeStateAsync(db, store, feedId, versionId, true, Actor);
    /// <inheritdoc />
    [PostAction(claim: INuPakServices.SettingsClaim)]
-   public async Task PostMeta_NuPakVersionPurge(string feedId, string versionId) { await NuPakOperations.PurgeAsync(db, store, feedId, versionId, Actor); }
+   public async Task PostMeta_NuPakVersionPurge(string feedId, string versionId) {
+      await NuPakOperations.PurgeAsync(db, store, feedId, versionId, Actor);
+      await AuditSystemAsync("System.NuPak", versionId, "version.purged", $"Purged package version {versionId}", "version", new { feedId });
+   }
    /// <inheritdoc />
    [PostAction(claim: INuPakServices.SettingsClaim)]
    public async Task<NuPakEmptyResult> PostMeta_NuPakRecycleBinEmpty(string feedId, string? prefixId) {

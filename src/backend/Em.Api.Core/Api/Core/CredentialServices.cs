@@ -1,7 +1,9 @@
 ﻿using EFCore.BulkExtensions;
 using Microsoft.EntityFrameworkCore;
+using Em.Api.Core.Log.Audit;
 using Em.Api.Core.Models;
 using Em.Shared;
+using Microsoft.Extensions.Logging;
 
 namespace Em.Api.Core
 {
@@ -100,6 +102,7 @@ namespace Em.Api.Core
             storedContact.cContactDefaultAddress_cAddressId = defaultAddressId;
             storedContact.cContactDefaultComm_cCommId = defaultCommId;
             ctx.ta_Users.Add(user);
+            UserAudits.Created(user);
             await ctx.SaveChangesAsync();
 
             // Saved on its own round rather than together with the user above: the credential points
@@ -177,6 +180,10 @@ namespace Em.Api.Core
             // written, and the database refuses it until that row exists.
             await ctx.BulkInsertAsync(credentials);
 
+            // Bulk writes bypass SaveChanges, so the audit entries are saved explicitly inside the transaction.
+            foreach (var user in users) UserAudits.Created(user);
+            await UserAudits.Writer.SaveAsync(ctx);
+
             await tx.CommitAsync();
          }
          catch (Exception) {
@@ -192,16 +199,15 @@ namespace Em.Api.Core
          // it here has no effect while the old session is still alive. The previous value is read first so
          // those sessions can be ended - exactly the same reason that makes a password change revoke
          // sessions: what the token vouches for must not differ from what is written in the data.
-         var wasAdmin = await ctx.ta_Users.AsNoTracking()
-            .Where(r => r.cUserId == data.cUserId)
-            .Select(r => (bool?)r.cUserIsAdmin)
-            .SingleOrDefaultAsync();
+         var before = await ctx.ta_Users.AsNoTracking().SingleOrDefaultAsync(r => r.cUserId == data.cUserId);
+         var wasAdmin = before?.cUserIsAdmin;
 
          ctx.UpdateRow(data);
+         UserAudits.Updated(before, data);
          await ctx.SaveChangesAsync();
 
          if (wasAdmin is { } previous && previous != data.cUserIsAdmin) {
-            await Tokens.RevokeAllAsync(data.cUserId);
+            await Tokens.RevokeAllAsync(data.cUserId, "admin.toggled");
          }
       }
 
@@ -212,16 +218,20 @@ namespace Em.Api.Core
          // sessions, and the change can only be detected by reading the old value before this write
          // overwrites it.
          var ids = datas.Select(r => r.cUserId).ToArray();
-         var wereAdmin = await ctx.ta_Users.AsNoTracking()
+         var befores = await ctx.ta_Users.AsNoTracking()
             .Where(r => ids.Contains(r.cUserId))
-            .Select(r => new { r.cUserId, r.cUserIsAdmin })
-            .ToDictionaryAsync(r => r.cUserId, r => r.cUserIsAdmin);
+            .ToDictionaryAsync(r => r.cUserId);
 
-         await ctx.BulkUpdateAsync(datas);
+         await using (var tx = await ctx.Database.BeginTransactionAsync()) {
+            await ctx.BulkUpdateAsync(datas);
+            foreach (var user in datas) UserAudits.Updated(befores.GetValueOrDefault(user.cUserId), user);
+            await UserAudits.Writer.SaveAsync(ctx);
+            await tx.CommitAsync();
+         }
 
          foreach (var user in datas) {
-            if (wereAdmin.TryGetValue(user.cUserId, out var wasAdmin) && wasAdmin != user.cUserIsAdmin) {
-               await Tokens.RevokeAllAsync(user.cUserId);
+            if (befores.TryGetValue(user.cUserId, out var before) && before.cUserIsAdmin != user.cUserIsAdmin) {
+               await Tokens.RevokeAllAsync(user.cUserId, "admin.toggled");
             }
          }
       }
@@ -230,13 +240,18 @@ namespace Em.Api.Core
       [PostAction]
       public async Task PostTa_User_Delete(ta_User data) {
          ctx.DeleteRow(data);
+         UserAudits.Deleted(data.cUserId, data.cUserAccount);
          await ctx.SaveChangesAsync();
       }
 
       /// <inheritdoc />
       [PostAction]
       public async Task PostTa_User_DeleteBatch(ta_User[] datas) {
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkDeleteAsync(datas);
+         foreach (var user in datas) UserAudits.Deleted(user.cUserId, user.cUserAccount);
+         await UserAudits.Writer.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       #endregion
@@ -290,6 +305,7 @@ namespace Em.Api.Core
       public async Task PostTa_Role_New(ta_Role data) {
          Request.RequireAdmin();
          ctx.ta_Roles.Add(data);
+         RoleAudits.Changed("created", null, data);
          await ctx.SaveChangesAsync();
       }
 
@@ -297,14 +313,20 @@ namespace Em.Api.Core
       [PostAction]
       public async Task PostTa_Role_NewBatch(ta_Role[] datas) {
          Request.RequireAdmin();
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkInsertAsync(datas);
+         foreach (var role in datas) RoleAudits.Changed("created", null, role);
+         await AuditWriter.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       /// <inheritdoc />
       [PostAction]
       public async Task PostTa_Role_Update(ta_Role data) {
          Request.RequireAdmin();
+         var before = await ctx.ta_Roles.AsNoTracking().SingleOrDefaultAsync(r => r.cRoleId == data.cRoleId);
          ctx.UpdateRow(data);
+         RoleAudits.Changed("updated", before, data);
          await ctx.SaveChangesAsync();
       }
 
@@ -312,7 +334,13 @@ namespace Em.Api.Core
       [PostAction]
       public async Task PostTa_Role_UpdateBatch(ta_Role[] datas) {
          Request.RequireAdmin();
+         var ids = datas.Select(r => r.cRoleId).ToArray();
+         var befores = await ctx.ta_Roles.AsNoTracking().Where(r => ids.Contains(r.cRoleId)).ToDictionaryAsync(r => r.cRoleId);
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkUpdateAsync(datas);
+         foreach (var role in datas) RoleAudits.Changed("updated", befores.GetValueOrDefault(role.cRoleId), role);
+         await AuditWriter.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       /// <inheritdoc />
@@ -332,6 +360,8 @@ namespace Em.Api.Core
          }
 
          ctx.DeleteRow(data);
+         RoleAudits.Changed("deleted", null, data);
+         foreach (var row in assignments) UserAudits.Role("role.revoked", row);
 
          // A single SaveChanges, so a single transaction: if deleting the role fails, the assignments that
          // were already deleted come back too - not left as rows pointing at a role that still exists.
@@ -356,7 +386,9 @@ namespace Em.Api.Core
 
          foreach (var row in datas) {
             ctx.DeleteRow(row);
+            RoleAudits.Changed("deleted", null, row);
          }
+         foreach (var row in assignments) UserAudits.Role("role.revoked", row);
 
          await ctx.SaveChangesAsync();
       }
@@ -392,6 +424,7 @@ namespace Em.Api.Core
          if (exists) return;
 
          ctx.ta_RoleClaims.Add(data);
+         RoleAudits.Claim("claim.added", data.cRoleId, data.cClaimName);
          await ctx.SaveChangesAsync();
       }
 
@@ -419,6 +452,7 @@ namespace Em.Api.Core
          if (rows.Length == 0) return;
 
          ctx.ta_RoleClaims.AddRange(rows);
+         foreach (var row in rows) RoleAudits.Claim("claim.added", row.cRoleId, row.cClaimName);
          await ctx.SaveChangesAsync();
       }
 
@@ -427,6 +461,7 @@ namespace Em.Api.Core
       public async Task PostTa_RoleClaim_Delete(ta_RoleClaim data) {
          Request.RequireAdmin();
          ctx.DeleteRow(data);
+         RoleAudits.Claim("claim.removed", data.cRoleId, data.cClaimName);
          await ctx.SaveChangesAsync();
       }
 
@@ -434,7 +469,11 @@ namespace Em.Api.Core
       [PostAction]
       public async Task PostTa_RoleClaim_DeleteBatch(ta_RoleClaim[] datas) {
          Request.RequireAdmin();
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkDeleteAsync(datas);
+         foreach (var row in datas) RoleAudits.Claim("claim.removed", row.cRoleId, row.cClaimName);
+         await AuditWriter.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       #endregion
@@ -480,6 +519,7 @@ namespace Em.Api.Core
          if (exists) return;
 
          ctx.ta_UserRoles.Add(data);
+         UserAudits.Role("role.granted", data);
          await ctx.SaveChangesAsync();
       }
 
@@ -506,14 +546,20 @@ namespace Em.Api.Core
             .ToArray();
          if (rows.Length == 0) return;
 
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkInsertAsync(rows);
+         foreach (var row in rows) UserAudits.Role("role.granted", row);
+         await AuditWriter.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       /// <inheritdoc />
       [PostAction]
       public async Task PostTa_UserRole_Update(ta_UserRole data) {
          Request.RequireAdmin();
+         var before = await ctx.ta_UserRoles.AsNoTracking().SingleOrDefaultAsync(r => r.cUserId == data.cUserId && r.cRoleId == data.cRoleId);
          ctx.UpdateRow(data);
+         UserAudits.Role("role.updated", data, before);
          await ctx.SaveChangesAsync();
       }
 
@@ -522,6 +568,7 @@ namespace Em.Api.Core
       public async Task PostTa_UserRole_Delete(ta_UserRole data) {
          Request.RequireAdmin();
          ctx.DeleteRow(data);
+         UserAudits.Role("role.revoked", data);
          await ctx.SaveChangesAsync();
       }
 
@@ -529,7 +576,11 @@ namespace Em.Api.Core
       [PostAction]
       public async Task PostTa_UserRole_DeleteBatch(ta_UserRole[] datas) {
          Request.RequireAdmin();
+         await using var tx = await ctx.Database.BeginTransactionAsync();
          await ctx.BulkDeleteAsync(datas);
+         foreach (var row in datas) UserAudits.Role("role.revoked", row);
+         await AuditWriter.SaveAsync(ctx);
+         await tx.CommitAsync();
       }
 
       #endregion
@@ -751,11 +802,13 @@ namespace Em.Api.Core
          // the state column is what says an account may be signed into, and a correct password does
          // not override it.
          if (user is null || user.cUserState < UserState.Inactive) {
+            await AuditSignInFailedAsync(cUserAccount, user?.cUserId, user is null ? "account" : "state");
             throw new ActionException(InvalidCredentialsMessage, 401);
          }
 
          var credential = await this.GetCredentialAsync(user, PasswordCredential.CredentialType);
          if (!await credential.IsValidAsync(password)) {
+            await AuditSignInFailedAsync(cUserAccount, user.cUserId, "password");
             throw new ActionException(InvalidCredentialsMessage, 401);
          }
 
@@ -775,7 +828,7 @@ namespace Em.Api.Core
 
       /// <inheritdoc />
       [PostAction]
-      public Task PostMeta_SignOutAll() => Tokens.RevokeAllAsync(Request.RequireUserId());
+      public Task PostMeta_SignOutAll() => Tokens.RevokeAllAsync(Request.RequireUserId(), null);
 
       /// <inheritdoc />
       [PostAction]
@@ -793,10 +846,11 @@ namespace Em.Api.Core
          }
 
          await ((PasswordCredential)credential).UpdateCredential(newPassword);
+         await PasswordAudits.ChangedAsync(user.cUserId, "changed.self", "Changed own password");
 
          // Every other session keeps a refresh token that was handed out under the old password, so
          // changing it has to end them - otherwise whoever the change was meant to lock out stays in.
-         await Tokens.RevokeAllAsync(user.cUserId);
+         await Tokens.RevokeAllAsync(user.cUserId, "password.changed");
       }
 
       /// <inheritdoc />
@@ -807,7 +861,10 @@ namespace Em.Api.Core
          var user = await RequireUserAsync(cUserId);
          var credential = await this.GetCredentialAsync(user, PasswordCredential.CredentialType);
          await ((PasswordCredential)credential).UpdateCredential(newPassword);
-         await Tokens.RevokeAllAsync(cUserId);
+         var self = Request.IsSelf(cUserId);
+         await PasswordAudits.ChangedAsync(cUserId, self ? "changed.self" : "reset.byAdmin",
+            self ? "Changed own password" : $"Password reset for {user.cUserAccount}");
+         await Tokens.RevokeAllAsync(cUserId, self ? "password.changed" : "password.reset.byAdmin");
       }
 
       /// <inheritdoc />
@@ -839,10 +896,11 @@ namespace Em.Api.Core
          await RequireAdminAccountAccessAsync();
 
          await AdminAccount.SetPasswordAsync(ctx, Hasher, newPassword);
+         await PasswordAudits.ChangedAsync(Defaults.AdminUserId, "admin.reset", "Reset the administrator password");
 
          // Every session of the account was opened under the old password, so changing it has to
          // end them - otherwise whoever the change was meant to lock out simply stays in.
-         await Tokens.RevokeAllAsync(Defaults.AdminUserId);
+         await Tokens.RevokeAllAsync(Defaults.AdminUserId, "password.admin.reset");
       }
 
       /// <inheritdoc />
@@ -908,6 +966,7 @@ namespace Em.Api.Core
             cUserClaimExpiry = Defaults.NoExpiry,
             datestamp = stamp
          });
+         UserAudits.Claim("claim.granted", claim.cUserId, claim.cUserClaimName);
          await ctx.SaveChangesAsync();
       }
 
@@ -924,7 +983,10 @@ namespace Em.Api.Core
             ctx.DeleteRow(row);
          }
 
-         if (rows.Length > 0) await ctx.SaveChangesAsync();
+         if (rows.Length > 0) {
+            UserAudits.Claim("claim.revoked", claim.cUserId, claim.cUserClaimName);
+            await ctx.SaveChangesAsync();
+         }
       }
 
       /// <inheritdoc />
@@ -942,7 +1004,8 @@ namespace Em.Api.Core
          }
 
          await AdminAccount.SetPasswordAsync(ctx, Hasher, newPassword);
-         await Tokens.RevokeAllAsync(Defaults.AdminUserId);
+         await PasswordAudits.ChangedAsync(Defaults.AdminUserId, "admin.changed", "Changed the administrator password");
+         await Tokens.RevokeAllAsync(Defaults.AdminUserId, "password.admin.changed");
       }
 
       /// <inheritdoc />
@@ -1018,6 +1081,24 @@ namespace Em.Api.Core
       private ITokenServices Tokens => GetService<ITokenServices>()
          ?? throw new InvalidOperationException($"No {nameof(ITokenServices)} is registered.");
 
+      // Engine audit classes, resolved on use for the same reason as the token service above.
+      private UserAudit UserAudits => GetService<UserAudit>() ?? throw new InvalidOperationException("UserAudit is not registered.");
+      private RoleAudit RoleAudits => GetService<RoleAudit>() ?? throw new InvalidOperationException("RoleAudit is not registered.");
+      private PasswordAudit PasswordAudits => GetService<PasswordAudit>() ?? throw new InvalidOperationException("PasswordAudit is not registered.");
+      private IAuditWriter AuditWriter => UserAudits.Writer;
+
+      // A refused sign-in is audited with its real reason, which never reaches the caller. A store problem must
+      // not change the answer, so it is only logged.
+      private async Task AuditSignInFailedAsync(string accountTried, string? userId, string reason) {
+         try {
+            await (GetService<AuthAudit>() ?? throw new InvalidOperationException("AuthAudit is not registered."))
+               .SignInFailedAsync(accountTried, userId, reason);
+         }
+         catch (Exception ex) {
+            Logger?.LogError(ex, "System.Auth audit of a failed sign-in could not be written.");
+         }
+      }
+
       // Composite key of one ta_RoleClaim row, used as the content of a HashSet when filtering duplicate
       // rows. Built through a single method so both sides of the comparison - what is already stored and
       // what just arrived - cannot be built in different ways.
@@ -1042,12 +1123,14 @@ namespace Em.Api.Core
          // its own would turn the login screen into a way of learning that the account is there but
          // currently switched off - which is exactly what switching it off was meant to stop.
          if (!await AdminAccount.IsEnabledAsync(ctx)) {
+            await AuditSignInFailedAsync(Defaults.AdminUserAccount, Defaults.AdminUserId, "state");
             throw new ActionException(InvalidCredentialsMessage, 401);
          }
 
          // PasswordCredential is not used here even though this is a password: it works over a user
          // row and a credential row, and this account has neither.
          if (!await AdminAccount.IsPasswordValidAsync(ctx, Hasher, password)) {
+            await AuditSignInFailedAsync(Defaults.AdminUserAccount, Defaults.AdminUserId, "password");
             throw new ActionException(InvalidCredentialsMessage, 401);
          }
 

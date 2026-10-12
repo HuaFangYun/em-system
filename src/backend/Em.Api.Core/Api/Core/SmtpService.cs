@@ -25,7 +25,11 @@ public sealed class SmtpService : ServicesBase, ISmtpService
    public Task<SmtpSettingsDetail> GetMeta_SmtpSettings() => _store.ReadAsync(AbortToken);
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
-   public Task<SmtpSettingsDetail> PostGetMeta_SmtpSettingsSave(SmtpSettingsSave request) => _store.SaveAsync(request, AbortToken);
+   public async Task<SmtpSettingsDetail> PostGetMeta_SmtpSettingsSave(SmtpSettingsSave request) {
+      var saved = await _store.SaveAsync(request, AbortToken);
+      await AuditSystemAsync("System.Settings", "smtp", "smtp.changed", "Changed the default SMTP settings", "settings");
+      return saved;
+   }
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
    public async Task<SmtpConnectionResult> PostGetMeta_SmtpTestConnection() {

@@ -10,7 +10,7 @@ namespace Em.Test.Api
    /// (this file), engine probes, business tasks, and approval.
    /// </summary>
    [Module(ITestServices.ModuleName)]
-   public partial class TestServices(TestDbContext ctx) : ServicesBase, ITestServices
+   public partial class TestServices(TestDbContext ctx, TestAudit audit) : ServicesBase, ITestServices
    {
       private const int MaxPageSize = 200;
 
@@ -41,6 +41,7 @@ namespace Em.Test.Api
          PrepareNewItem(data);
          await EnsureItemCodeFreeAsync(data.cTestItemCode, data.cTestItemId);
          ctx.ta_TestItems.Add(data);
+         audit.Created(data);
          await ctx.SaveChangesAsync();
       }
 
@@ -60,7 +61,9 @@ namespace Em.Test.Api
          ValidateItem(data);
          await EnsureItemCodeFreeAsync(data.cTestItemCode, data.cTestItemId);
          data.ustamp = DateTime.UtcNow;
+         var before = await ctx.ta_TestItems.AsNoTracking().SingleOrDefaultAsync(r => r.cTestItemId == data.cTestItemId);
          ctx.UpdateRow(data);
+         audit.Updated(before, data);
          await SaveOrNotFoundAsync("Item");
       }
 
@@ -81,6 +84,7 @@ namespace Em.Test.Api
       [PostAction(claim: ITestServices.DeleteItemsClaim)]
       public async Task PostTa_TestItem_Delete(ta_TestItem data) {
          ctx.DeleteRow(data);
+         audit.Deleted(data);
          await SaveOrNotFoundAsync("Item");
       }
 

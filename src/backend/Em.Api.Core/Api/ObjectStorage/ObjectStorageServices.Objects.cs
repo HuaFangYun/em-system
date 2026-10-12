@@ -31,8 +31,11 @@ public sealed partial class ObjectStorageServices
 
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.ManagerClaim)]
-   public async Task PostMeta_StoreObjectDelete(string bucketId, string key) =>
-      await store.DeleteAsync(await BucketName(bucketId), key, AbortToken);
+   public async Task PostMeta_StoreObjectDelete(string bucketId, string key) {
+      var bucket = await BucketName(bucketId);
+      await store.DeleteAsync(bucket, key, AbortToken);
+      await AuditSystemAsync("System.ObjectStorage", $"{bucket}/{key}", "object.deleted", $"Deleted object {bucket}/{key}", "object");
+   }
 
    /// <inheritdoc />
    [GetAction(claim: IObjectStorageServices.ManagerClaim)]
@@ -46,6 +49,10 @@ public sealed partial class ObjectStorageServices
 
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.SettingsClaim)]
-   public async Task PostMeta_StoreObjectVersionPurge(string bucketId, string key, int version) =>
-      await store.PurgeVersionAsync(await BucketName(bucketId), key, version, AbortToken);
+   public async Task PostMeta_StoreObjectVersionPurge(string bucketId, string key, int version) {
+      var bucket = await BucketName(bucketId);
+      await store.PurgeVersionAsync(bucket, key, version, AbortToken);
+      await AuditSystemAsync("System.ObjectStorage", $"{bucket}/{key}", "version.purged", $"Purged version {version} of {bucket}/{key}", "object",
+         new { version });
+   }
 }

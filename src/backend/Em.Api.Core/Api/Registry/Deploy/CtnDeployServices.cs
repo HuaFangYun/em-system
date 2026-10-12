@@ -36,6 +36,7 @@ namespace Em.Api.Core.Registry
       [PostAction(claim: ICtnServices.CtnClaim)]
       public async Task PostMeta_CtnDeployTargetDelete(string imageId) {
          if (!await DeployStore.DeleteAsync(imageId)) throw new ActionException("This container has no deploy target.", 404);
+         await AuditSystemAsync("System.Registry", imageId, "deploy.target.deleted", "Deleted deploy target", "image");
       }
 
       /// <inheritdoc />
@@ -126,8 +127,10 @@ namespace Em.Api.Core.Registry
          if (resolution.Row is not { } row) return CtnDeployStore.Skipped(resolution, request.Digest);
 
          var target = await store.ToTargetAsync(row);
-         return await DeployRunner.RunAsync(Db, row, target, resolution.Repository, CtnDeployTrigger.AfterPush, request.Digest,
+         var run = await DeployRunner.RunAsync(Db, row, target, resolution.Repository, CtnDeployTrigger.AfterPush, request.Digest,
             resolution.Tag, CallerUserId, await CallerNameAsync());
+         await AuditSystemAsync("System.Registry", row.cCtnImageId, "deploy.run", $"Deploy (after push): {run.Result}", "image", run);
+         return run;
       }
 
       /// <inheritdoc />
@@ -139,8 +142,10 @@ namespace Em.Api.Core.Registry
          await store.RequireManifestAsync(imageId, digest);
 
          var target = await store.ToTargetAsync(row);
-         return await DeployRunner.RunAsync(Db, row, target, await store.RepositoryAsync(imageId), CtnDeployTrigger.Manual, digest,
+         var run = await DeployRunner.RunAsync(Db, row, target, await store.RepositoryAsync(imageId), CtnDeployTrigger.Manual, digest,
             string.IsNullOrWhiteSpace(tag) ? null : tag.Trim(), CallerUserId, await CallerNameAsync());
+         await AuditSystemAsync("System.Registry", imageId, "deploy.run", $"Deploy (manual): {run.Result}", "image", run);
+         return run;
       }
 
       /// <inheritdoc />
@@ -155,8 +160,10 @@ namespace Em.Api.Core.Registry
 
          await store.RequireManifestAsync(imageId, previous.cCtnDeployRunDigest);
          var target = await store.ToTargetAsync(row);
-         return await DeployRunner.RunAsync(Db, row, target, await store.RepositoryAsync(imageId), CtnDeployTrigger.Rollback,
+         var run = await DeployRunner.RunAsync(Db, row, target, await store.RepositoryAsync(imageId), CtnDeployTrigger.Rollback,
             previous.cCtnDeployRunDigest, previous.cCtnDeployRunTag, CallerUserId, await CallerNameAsync());
+         await AuditSystemAsync("System.Registry", imageId, "deploy.run", $"Deploy (rollback): {run.Result}", "image", run);
+         return run;
       }
 
       /// <inheritdoc />

@@ -59,3 +59,5 @@ docker compose -f src/backend/compose.yml down
 NuGet prerequisites: run em-system `doc/sqlscript/mssql/tables/040-nupak.sql` and `views/vi_NuPak*.sql` (schema version 2). See em-system `doc/engine/engine-nupak.md`. Engine host uses managed settings; EmPorium House uses `AddNuPak(config.Storage.NuPakPath, config.Storage.NuPakMaxPackageMb)`.
 
 Object storage prerequisites: run `doc/sqlscript/mssql/tables/060-objectstore.sql` and `views/vi_Store*.sql`. The sample host enables `AddObjectStorage()` unless `"modules": { "objectStorage": false }` or `EM_MODULE_OBJECTSTORAGE=false` is set. See `doc/engine/engine-object-storage.md`.
+
+Log engine prerequisites: run `doc/sqlscript/mssql/tables/070-log-audit.sql` and `071-log-store.sql` (MySQL and PostgreSQL versions are in `doc/sqlscript/mysql/` and `doc/sqlscript/postgresql/`). The sample host enables `AddLogServer()` unless `"modules": { "logServer": false }` or `EM_MODULE_LOGSERVER=false` is set. `EM_LOG_DB_CONNECTION` (with `EM_LOG_DB_PROVIDER`) overrides the log write store. See `doc/engine/engine-log.md`.

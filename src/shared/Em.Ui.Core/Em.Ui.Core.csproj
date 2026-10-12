@@ -16,4 +16,13 @@
       <ProjectReference Include="..\Em.Libs\Em.Libs.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+      <!-- Client log engine (ClientLogProvider); see doc/engine/engine-log.md. -->
+      <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <InternalsVisibleTo Include="Em.Ui.Core.Tests" />
+    </ItemGroup>
+
 </Project>

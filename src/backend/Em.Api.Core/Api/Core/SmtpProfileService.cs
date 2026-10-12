@@ -22,13 +22,25 @@ public sealed class SmtpProfileService : ServicesBase, ISmtpProfileService
    public Task<SmtpProfileList> GetMeta_SmtpProfiles() => _profiles.ProfilesAsync(AbortToken);
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
-   public Task<SmtpProfileDetail> PostGetMeta_SmtpProfileSave(SmtpProfileSave request) => _profiles.SaveProfileAsync(request, AbortToken);
+   public async Task<SmtpProfileDetail> PostGetMeta_SmtpProfileSave(SmtpProfileSave request) {
+      var saved = await _profiles.SaveProfileAsync(request, AbortToken);
+      await AuditSystemAsync("System.Settings", "smtp", "smtp.changed", $"Saved SMTP profile '{request.Name}'", "settings");
+      return saved;
+   }
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
-   public Task<SmtpProfileList> PostGetMeta_SmtpProfileDelete(string id, long expectedRevision) => _profiles.DeleteAsync(id, expectedRevision, AbortToken);
+   public async Task<SmtpProfileList> PostGetMeta_SmtpProfileDelete(string id, long expectedRevision) {
+      var list = await _profiles.DeleteAsync(id, expectedRevision, AbortToken);
+      await AuditSystemAsync("System.Settings", "smtp", "smtp.changed", $"Deleted SMTP profile {id}", "settings");
+      return list;
+   }
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
-   public Task<SmtpProfileList> PostGetMeta_SmtpDefault(string? id, long expectedRevision) => _profiles.DefaultAsync(id, expectedRevision, AbortToken);
+   public async Task<SmtpProfileList> PostGetMeta_SmtpDefault(string? id, long expectedRevision) {
+      var list = await _profiles.DefaultAsync(id, expectedRevision, AbortToken);
+      await AuditSystemAsync("System.Settings", "smtp", "smtp.changed", id is null ? "Cleared the default SMTP profile" : $"Set SMTP profile {id} as default", "settings");
+      return list;
+   }
    /// <inheritdoc />
    [PostAction(claim: ISmtpService.ManagerClaim)]
    public async Task<SmtpConnectionResult> PostGetMeta_SmtpProfileTestConnection(string id) {

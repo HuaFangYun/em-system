@@ -26,7 +26,11 @@ namespace Em.Api.Core.Registry
       public Task<StorageDirectoryValidation> PostGetMeta_CtnValidateDirectory(StorageFeatureSettings settings) => Task.FromResult(Settings.Validate(false, settings, target => RegistryStorageIntegrity.Verify(GetService<CtnContext>()!, target)));
       /// <inheritdoc />
       [PostAction(claim: ICtnServices.SettingsClaim)]
-      public Task<StorageSettingsDetail> PostGetMeta_CtnSettingsSave(StorageSettingsSave request) => Task.FromResult(Settings.Save(false, request, target => RegistryStorageIntegrity.Verify(GetService<CtnContext>()!, target)));
+      public async Task<StorageSettingsDetail> PostGetMeta_CtnSettingsSave(StorageSettingsSave request) {
+         var saved = Settings.Save(false, request, target => RegistryStorageIntegrity.Verify(GetService<CtnContext>()!, target));
+         await AuditSystemAsync("System.Settings", "registry", "storage.changed", "Changed container registry storage settings", "settings", request.Settings);
+         return saved;
+      }
 
       private CtnBlobStore Store {
          get {
@@ -371,6 +375,7 @@ namespace Em.Api.Core.Registry
          await RequireImageAsync(db, imageId);
          var rows = await db.Tags.Where(t => t.cCtnImageId == imageId && t.cCtnTagName == tag).ExecuteDeleteAsync(AbortToken);
          if (rows == 0) throw new ActionException($"Tag '{tag}' was not found.", 404);
+         await AuditSystemAsync("System.Registry", imageId, "tag.deleted", $"Deleted tag {tag}", "image", new { tag });
       }
 
       /// <inheritdoc />
@@ -385,6 +390,7 @@ namespace Em.Api.Core.Registry
          }
 
          await CtnManifestDeletion.DeleteAsync(db, manifestId, AbortToken);
+         await AuditSystemAsync("System.Registry", imageId, "manifest.deleted", $"Deleted manifest {digest}", "image", new { digest });
       }
 
       #endregion
@@ -398,8 +404,11 @@ namespace Em.Api.Core.Registry
 
       /// <inheritdoc />
       [PostAction(claim: ICtnServices.CtnClaim)]
-      public Task<CtnGcReport> PostGetMeta_CtnGcRun(int graceHours) =>
-         new CtnGarbageCollector(Db, Store).RunAsync(graceHours, dryRun: false, AbortToken);
+      public async Task<CtnGcReport> PostGetMeta_CtnGcRun(int graceHours) {
+         var report = await new CtnGarbageCollector(Db, Store).RunAsync(graceHours, dryRun: false, AbortToken);
+         await AuditSystemAsync("System.Registry", "gc", "gc.run", $"Ran garbage collection (grace {graceHours} h)", "registry", report);
+         return report;
+      }
 
       #endregion
 

@@ -17,6 +17,12 @@ var app = EmApp.BuildApp(args, builder => {
       builder.AddObjectStorage();
    }
 
+   // Log engine (telemetry, audit, Log Manager); needs tables/070-log-audit.sql and 071-log-store.sql.
+   // Turn off with "modules": { "logServer": false } or EM_MODULE_LOGSERVER=false.
+   if (config.IsModuleEnabled("logServer", true)) {
+      builder.AddLogServer();
+   }
+
    builder.AddLocalBinaryStorage(config.Storage.BinaryPath);
    if (config.IsModuleEnabled("test")) {
       builder.AddTestModule();

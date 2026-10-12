@@ -1,8 +1,8 @@
 # User Editor: tab Activity (riwayat akun)
 
 - **Tanggal:** 2026-10-08
-- **Status:** diskusi
-- **Plan turunan:** belum ada
+- **Status:** dieksekusi lewat log engine (2026-10-12) — tab Activity kini nyata, menunggu uji pengguna di Windows
+- **Plan turunan:** [plan/executed/penyimpanan-log.md](../../plan/executed/penyimpanan-log.md)
 - **Catatan terkait:** [doc/engine/engine-user-manager.md](../engine/engine-user-manager.md)
 
 Catatan ini berisi gagasan, bukan perintah kerja. Agent tidak boleh mengeksekusinya sebelum catatan ini dijadikan plan di `plan/unexecuted/`.
@@ -29,3 +29,17 @@ Filter periode (30 hari, 90 hari, semua) dan pemuatan bertahap ("Load older acti
 - **Retensi:** berapa lama riwayat disimpan?
 - **Action server:** bentuk action GET per field (mis. `GetMeta_UserActivity(userId, from, page, pageSize)`), sesuai aturan action GET parameter sederhana.
 - **MAUI:** perlu juga, atau WPF saja dulu?
+
+## Hasil (2026-10-12)
+
+Dikerjakan sebagai bagian plan log engine ([doc/engine/engine-log.md](../engine/engine-log.md)):
+
+- **Sumber data:** audit engine `System.User`, `System.Password`, `System.Auth` di `ta_LogAudit`, dicatat dalam
+  transaksi yang sama dengan perubahan akun (pelaku, sebelum/sesudah per field).
+- **Action:** `IAuditServices.GetMeta_AuditActivity_ByTarget(targetType, key, groups, cursor, take)` dengan cursor
+  opaque (bukan nomor halaman).
+- **Hak baca:** grup sistem itu bisa dibaca pemegang `User Manager Access`; `System.Auth`/`System.Password` juga
+  oleh `Log Security Read`. Administrator dan debug token selalu bisa.
+- **Retensi:** grup `System.*` bawaan 24 bulan (minimum 12), diatur di Log Manager > Settings > Retention.
+- **WPF:** tab Activity (`UserActivityVm`) memuat timeline nyata, filter periode, dan "Load older activity".
+  **MAUI:** belum.

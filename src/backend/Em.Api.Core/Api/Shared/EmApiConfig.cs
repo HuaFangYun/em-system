@@ -37,6 +37,8 @@ public sealed class EmApiConfig
    public SessionSection Session { get; set; } = new();
    /// <summary>Storage paths.</summary>
    public StorageSection Storage { get; set; } = new();
+   /// <summary>Log engine settings, used when the host calls <see cref="EmAppBuilder.AddLogServer"/>.</summary>
+   public LogSection Log { get; set; } = new();
 
    /// <summary>
    /// Switches of optional modules by name (e.g. <c>"modules": { "test": true }</c>). The engine does not
@@ -102,6 +104,8 @@ public sealed class EmApiConfig
          throw new InvalidOperationException("session.tokenRetentionHours must be greater than 0.");
       }
 
+      if (Log.QueueCapacity is < 1000 or > 1_000_000) throw new InvalidOperationException("log.queueCapacity must be 1000-1000000.");
+      if (Log.OutboxMaxMb is < 10 or > 100_000) throw new InvalidOperationException("log.outboxMaxMb must be 10-100000.");
       if (Storage.NuPakMaxPackageMb is <1 or >4096) throw new InvalidOperationException("storage.nuPakMaxPackageMb must be 1–4096.");
       if (Storage.CdnMaxFileSizeMb <= 0) {
          throw new InvalidOperationException("storage.cdnMaxFileSizeMb must be greater than 0.");
@@ -202,5 +206,23 @@ public sealed class EmApiConfig
       public int NuPakMaxPackageMb { get; set; } = 250;
       /// <summary>Folder of container registry blobs.</summary>
       public string RegistryPath { get; set; } = "./data/container-registry";
+      /// <summary>Folder of the log engine's disk segments (used only while the log store cannot be written).</summary>
+      public string LogPath { get; set; } = "./data/logs";
+   }
+
+   /// <summary>Log engine settings; see <c>doc/engine/engine-log.md</c>.</summary>
+   public sealed class LogSection
+   {
+      /// <summary>Also store the IN and START request trace lines; by default only DONE, ABORT and REJECT are stored.</summary>
+      public bool StoreRequestStartLines { get; set; }
+
+      /// <summary>Capacity of the in-memory telemetry queue, in events.</summary>
+      public int QueueCapacity { get; set; } = 20_000;
+
+      /// <summary>Total size limit of the disk segments kept while the store cannot be written, in megabytes.</summary>
+      public int OutboxMaxMb { get; set; } = 500;
+
+      /// <summary>Application name written on every event; <c>null</c> uses the entry assembly name.</summary>
+      public string? AppName { get; set; }
    }
 }

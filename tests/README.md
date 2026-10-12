@@ -45,6 +45,12 @@ and drops it at the end.
   dotnet test src/backend/Em.Api.slnx
   ```
 
+- SQL authentication instead of Windows Authentication: set `EM_TEST_DB_USER` and `EM_TEST_DB_PASSWORD`
+  together with `EM_TEST_DB_SERVER` (for example a SQL Server container at `localhost,1433`).
+- The log store tests also run against PostgreSQL and MySQL when `EM_TEST_PG` / `EM_TEST_MYSQL` hold a
+  connection string without a database (for example `Host=localhost;Username=postgres;Password=...` or
+  `Server=localhost;User ID=emtest;Password=...`); the user must be allowed to create databases. Without
+  them those cases are skipped.
 - If the server cannot be reached, the integration tests are skipped with a reason instead of failing.
 - A run that is killed can leave its database behind. Find leftovers with
   `SELECT name FROM sys.databases WHERE name LIKE 'EmSystem_IntegrationTest_%'` and drop them manually.

@@ -57,7 +57,11 @@ namespace Em.Api.Core
       /// Ends all sessions of a user, on any device.
       /// </summary>
       /// <param name="cUserId">The user whose sessions are all ended.</param>
-      Task RevokeAllAsync(string cUserId);
+      /// <param name="reason">
+      /// Why the sessions end, recorded in the <c>System.Auth</c> audit: <c>null</c> when the user signs out of
+      /// every device (<c>signout.all</c>), otherwise the cause (e.g. <c>password.reset</c>, <c>session.revoked</c>).
+      /// </param>
+      Task RevokeAllAsync(string cUserId, string? reason = null);
 
       /// <summary>
       /// All sessions of one account, newest first. Through here, not through a direct query, because system

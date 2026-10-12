@@ -49,5 +49,10 @@ public partial class EmAppBuilder
       }
 
       BusinessTaskCachePath = config.Storage.TaskCachePath;
+      LogSettings.LogPath = config.Storage.LogPath;
+      LogSettings.StoreRequestStartLines = config.Log.StoreRequestStartLines;
+      LogSettings.QueueCapacity = config.Log.QueueCapacity;
+      LogSettings.OutboxMaxBytes = config.Log.OutboxMaxMb * 1024L * 1024L;
+      if (!string.IsNullOrWhiteSpace(config.Log.AppName)) LogSettings.AppName = config.Log.AppName;
    }
 }

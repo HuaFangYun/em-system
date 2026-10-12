@@ -142,6 +142,7 @@ namespace Em.Ui.Wpf.Navigations
       /// <param name="app">The application object that owns this view model.</param>
       public void AttachApp(EmApp app) {
          EmApp = app;
+         Activity.EmApp = app;
          RefreshPasswordPolicy();
       }
 
@@ -175,8 +176,11 @@ namespace Em.Ui.Wpf.Navigations
       /// </summary>
       public User? Data {
          get => Get<User?>();
-         private set => Set(value);
+         private set => Set(value, user => Activity.Reset(user is { IsBlank: false } ? user.cUserId : null));
       }
+
+      /// <summary>The Activity tab: this account's audit history.</summary>
+      public UserActivityVm Activity { get; } = new();
 
       /// <summary>
       /// Indicates there are unsaved changes: on the open row, which already tracks it itself, or on the role

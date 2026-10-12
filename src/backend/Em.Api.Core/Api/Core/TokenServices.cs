@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
+using Em.Api.Core.Log.Audit;
 using Em.Api.Core.Models;
 using Em.Shared;
 
@@ -49,6 +50,8 @@ namespace Em.Api.Core
          // here naming a session that failed to be stored.
          await StoreFor(cUserId).AddAsync(sessionId, cUserId, HashRefreshToken(refreshToken),
             now.Add(RefreshTokenLifetime));
+         // Recorded here rather than in each sign-in action, so every way of opening a session is audited.
+         await Audit.SignedInAsync(cUserId, await AccountOfAsync(cUserId), sessionId, now.Add(RefreshTokenLifetime), "password");
 
          return await BuildTokenResultAsync(cUserId, sessionId, refreshToken, now);
       }
@@ -113,11 +116,29 @@ namespace Em.Api.Core
       public async Task RevokeAsync(string cUserSessionId) {
          // A session id on its own does not say which table it came out of, and a session id is all
          // a sign-out has to go on. Whichever store owns it answers; the other finds nothing.
-         if (await _userSessions.SetStateAsync(cUserSessionId, SessionState.Revoked)) return;
-         await _systemSessions.SetStateAsync(cUserSessionId, SessionState.Revoked);
+         var session = await _userSessions.FindByIdAsync(cUserSessionId) ?? await _systemSessions.FindByIdAsync(cUserSessionId);
+         if (!await _userSessions.SetStateAsync(cUserSessionId, SessionState.Revoked)) {
+            await _systemSessions.SetStateAsync(cUserSessionId, SessionState.Revoked);
+         }
+         if (session is not null) await Audit.SignedOutAsync(session.AccountId, cUserSessionId);
       }
 
-      public Task RevokeAllAsync(string cUserId) => StoreFor(cUserId).RevokeAllAsync(cUserId);
+      public async Task RevokeAllAsync(string cUserId, string? reason = null) {
+         var active = (await StoreFor(cUserId).ListByAccountAsync(cUserId))
+            .Count(s => s.State == SessionState.Active && s.Expiry > DateTime.UtcNow);
+         await StoreFor(cUserId).RevokeAllAsync(cUserId);
+         if (reason is null) await Audit.SignedOutAllAsync(cUserId, active);
+         else if (active > 0) await Audit.SessionsRevokedAsync(cUserId, reason, active);
+      }
+
+      // Resolved on use: TokenServices is created for the gate as well, where most requests never audit.
+      private AuthAudit Audit => GetService<AuthAudit>() ?? throw new InvalidOperationException("AuthAudit is not registered.");
+
+      private async Task<string?> AccountOfAsync(string cUserId) {
+         if (cUserId == Defaults.AdminUserId) return Defaults.AdminUserAccount;
+         if (cUserId == Defaults.DebuggerUserId) return Defaults.DebuggerUserAccount;
+         return await _ctx.ta_Users.AsNoTracking().Where(u => u.cUserId == cUserId).Select(u => u.cUserAccount).FirstOrDefaultAsync();
+      }
 
       public Task<SessionRecord[]> ListSessionsAsync(string cUserId) => StoreFor(cUserId).ListByAccountAsync(cUserId);
 
@@ -151,6 +172,7 @@ namespace Em.Api.Core
          var now = DateTime.UtcNow;
          if (session.Expiry <= now) {
             await store.SetStateAsync(session.SessionId, SessionState.Expired);
+            await Audit.SessionExpiredAsync(session.AccountId, session.SessionId);
             throw new ActionException(InvalidRefreshTokenMessage, 401);
          }
 

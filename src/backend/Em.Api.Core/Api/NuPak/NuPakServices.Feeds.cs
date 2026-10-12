@@ -82,6 +82,7 @@ public sealed partial class NuPakServices {
          try {store.DeleteEmptyFeed(feedId);} catch(IOException) {throw new ActionException("Feed deleted; empty folder cleanup failed. Inspect the server store.",500);}
          catch(UnauthorizedAccessException) {throw new ActionException("Feed deleted; folder cleanup access denied. Inspect the server store.",500);}
       } finally {store.Gate.Release();}
+      await AuditSystemAsync("System.NuPak", feedId, "feed.deleted", $"Deleted feed {feedId}", "feed");
    }
    /// <inheritdoc />
    [GetAction(claim: INuPakServices.ManagerClaim)]

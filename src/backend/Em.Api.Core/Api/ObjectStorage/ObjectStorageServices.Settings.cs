@@ -108,6 +108,7 @@ public sealed partial class ObjectStorageServices
       await db.Volumes.Where(v => v.cStoreVolumeId == volumeId).ExecuteDeleteAsync(AbortToken);
       await tx.CommitAsync(AbortToken);
       runtime.InvalidateVolumes();
+      await AuditSystemAsync("System.ObjectStorage", volumeId, "volume.deleted", $"Deleted volume {volumeId}", "volume");
    }
 
    #endregion
@@ -204,6 +205,7 @@ public sealed partial class ObjectStorageServices
       await db.PolicyVolumes.Where(p => p.cStorePolicyId == policyId).ExecuteDeleteAsync(AbortToken);
       await db.Policies.Where(p => p.cStorePolicyId == policyId).ExecuteDeleteAsync(AbortToken);
       await tx.CommitAsync(AbortToken);
+      await AuditSystemAsync("System.ObjectStorage", policyId, "policy.deleted", $"Deleted policy {policyId}", "policy");
    }
 
    #endregion
@@ -274,6 +276,7 @@ public sealed partial class ObjectStorageServices
          throw new ActionException("The bucket still holds objects, including deleted objects with history. Purge them first.", 409);
       await db.Buckets.Where(b => b.cStoreBucketId == bucketId).ExecuteDeleteAsync(AbortToken);
       await tx.CommitAsync(AbortToken);
+      await AuditSystemAsync("System.ObjectStorage", bucketId, "bucket.deleted", $"Deleted bucket {bucket.cStoreBucketName}", "bucket");
    }
 
    #endregion

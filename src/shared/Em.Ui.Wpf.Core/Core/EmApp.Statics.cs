@@ -67,6 +67,8 @@ namespace Em.Ui.Wpf.Core
 
          InitInternalServices(app);
          InitBuilder(app, builder);
+         // After the builder callback: the log folder is named after ApplicationName.
+         InitClientLog(app);
 
          // Closed here, not at the end of InitBuilder: from outside, "finished being built" means all of
          // BuildApp has finished, and the only place that may decide that moment is this line.
@@ -421,6 +423,13 @@ namespace Em.Ui.Wpf.Core
             RequireParameter = false, IsMenuVisible = false,
             NavigationIcon = EFontAwesomeIcon.Solid_Database.CreateImageSource(System.Windows.Media.Brushes.Gray)
          }, "Administrative Tools:" + IObjectStorageServices.ManagerClaim));
+         app.AddNavigation(RequireClaim(new Navigation {
+            Name = LogManagerNavigationName, Title = "Log Manager", Subtitle = "Audit, errors and server log", OrderIndex = -1,
+            Description = "Search audit entries, security events, grouped errors and the server log; set the log store and retention.",
+            BodyType = BodyType.Of<LogManager>(), Kind = NavigationKind.Manager, EmApp = app,
+            RequireParameter = false, IsMenuVisible = false,
+            NavigationIcon = EFontAwesomeIcon.Solid_ClipboardList.CreateImageSource(System.Windows.Media.Brushes.Gray)
+         }, LogManagerClaim));
          app.AddNavigation(RequireClaim(new Navigation {
             Name = ObjectStorageBucketNavigationName, Title = "Bucket Editor", Subtitle = "Bucket settings and objects", OrderIndex = -1,
             Description = "Edit one bucket and manage its objects and versions.",

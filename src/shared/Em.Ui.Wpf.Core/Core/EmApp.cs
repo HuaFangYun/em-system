@@ -257,6 +257,8 @@ namespace Em.Ui.Wpf.Core
             }
          };
 
+         tools.Add(OpenLogFolderTool());
+
          // The two debug tools follow it. Neither is offered while a login is being simulated: the
          // application is then meant to behave exactly as it does without debug.
          if (IsDebugActive) {
@@ -292,7 +294,7 @@ namespace Em.Ui.Wpf.Core
 
          var groupEnd = tools.Count;
 
-         foreach (var name in (string[])["admin.users", "admin.roles", "admin.cdn", "admin.tasks", "admin.release", "admin.container", "admin.nupak", "admin.objectstorage", "admin.smtp"]) {
+         foreach (var name in (string[])["admin.users", "admin.roles", "admin.cdn", "admin.tasks", "admin.release", "admin.container", "admin.nupak", "admin.objectstorage", "admin.smtp", LogManagerNavigationName]) {
             var nav = Navigations.Single(r => r.Name == name);
             if (!CanOpen(nav)) continue;
 
@@ -520,6 +522,10 @@ namespace Em.Ui.Wpf.Core
             // application as long as such a window still exists.
             ShutdownMode = ShutdownMode.OnMainWindowClose
          };
+         HookUnhandledExceptions();
+         ActiveUserChanged += (_, _) => OnLogUserChanged();
+         OnLogUserChanged();
+
          // Themed scroll bars for every screen, including those that merge no engine style: the stock
          // ones are painted from system colours and stay light on the dark theme.
          App.Resources.MergedDictionaries.Add(new ResourceDictionary {
@@ -827,6 +833,7 @@ namespace Em.Ui.Wpf.Core
          // The debug token path has no session at all, and the server would answer 401 anyway because the
          // caller's session is empty - so something that has no session has no one to tell.
          if (notifyServer && client is { HasSession: true }) {
+            await FlushLogsBeforeSignOutAsync();
             try {
                await ServiceProvider.GetRequiredService<ICredentialServices>().PostMeta_SignOut();
             }

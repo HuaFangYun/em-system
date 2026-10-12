@@ -36,6 +36,13 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- Log store scripts used by Log Manager > Prepare; the files in doc/sqlscript are the single source. -->
+        <EmbeddedResource Include="..\..\..\doc\sqlscript\mssql\tables\071-log-store.sql" LogicalName="Em.Log.Store.mssql.sql" Link="Api\Log\Scripts\071-log-store.mssql.sql"/>
+        <EmbeddedResource Include="..\..\..\doc\sqlscript\mysql\tables\071-log-store.sql" LogicalName="Em.Log.Store.mysql.sql" Link="Api\Log\Scripts\071-log-store.mysql.sql"/>
+        <EmbeddedResource Include="..\..\..\doc\sqlscript\postgresql\tables\071-log-store.sql" LogicalName="Em.Log.Store.postgresql.sql" Link="Api\Log\Scripts\071-log-store.postgresql.sql"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <InternalsVisibleTo Include="Em.Api.Core.IntegrationTests"/>
         <InternalsVisibleTo Include="Em.Api.Core.Tests"/>
     </ItemGroup>

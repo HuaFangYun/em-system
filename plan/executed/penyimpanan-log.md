@@ -1,6 +1,6 @@
 # Plan — Log engine: audit data, audit sistem, dan telemetry (satu instalasi)
 
-Status: **belum dieksekusi**
+Status: **dieksekusi 2026-10-12** (Claude Code web) — lihat §16 Laporan eksekusi
 Dibuat: 2026-10-12, dipromosikan dari [doc/ideas/penyimpanan-log.md](../../doc/ideas/penyimpanan-log.md) atas
 permintaan pengguna. Pertanyaan yang tersisa di catatan ide dijawab dengan usulan bawaan di §2; pengguna
 menerima semua usulan itu (2026-10-12), sehingga plan siap dieksekusi tanpa pertanyaan lanjutan. Butir yang paling
@@ -445,4 +445,69 @@ hash berantai, layar Log Manager di MAUI.
 
 ## 16. Laporan eksekusi
 
-(Diisi saat plan dieksekusi.)
+Dieksekusi 2026-10-12 di sesi Claude Code web (Linux, .NET 10), branch `claude/gracious-ramanujan-2h62yg`.
+Panduan: [doc/engine/engine-log.md](../../doc/engine/engine-log.md). Temuan dan gagasan lanjutan:
+[doc/ideas/log-engine-lanjutan.md](../../doc/ideas/log-engine-lanjutan.md).
+
+### Yang dibangun
+
+- **Fase 1:** kontrak di `Em.Libs` (`LogModels`, `AuditModels`, `LogStoreModels`, `ILogServices`,
+  `IAuditServices`, `Defaults.LogModuleName = "core.log"`, `Defaults.AuditModuleName = "core.audit"`),
+  `EmAppBuilder.AddLogServer()`/`AddAudit(...)`/`AddScoped<T>()`, config `storage.logPath` + seksi `log`,
+  `Logging:EmLog`, saklar host `modules.logServer` (bawaan nyala).
+- **Fase 2:** skrip `070-log-audit.sql`, `071-log-store.sql` (SQL Server, MySQL, PostgreSQL; 071 di-embed untuk
+  Prepare), `LogStoreDbContext` (skema versi 1), `LogOutboxDbContext`, `ta_LogAudit` dipetakan di semua
+  `EmDbContext`, cek skema saat startup.
+- **Fase 3:** `EmLogProvider` + `LogQueue` + `LogWriterBackground` (fallback segmen JSONL di disk, kirim ulang),
+  `ErrorFingerprint`, `ta_LogError` (triage, Resolved → New), `RequestTrace` dengan RequestId unik dan scope,
+  `LogGuard` anti-rekursi, baris modul `core.log` di level Debug.
+- **Fase 4:** `AuditCatalog`, `IAuditWriter`/`AuditWriter` (parkir → `AuditSaveInterceptor` menambah baris di
+  transaksi yang sama; `Use(ctx)`; `WriteNowAsync`; `SaveAsync(ctx)`), `AuditDiff`, `AuditKey`, `AuditReader`
+  (gabung store + outbox, cursor opaque), `AuditServices`, laporan "audit entry not saved".
+- **Fase 5:** audit sistem `System.Auth/Password/User/Role/Robot/Settings/Registry/NuPak/ObjectStorage`
+  (sign-in berhasil/gagal dengan alasan nyata, sign-out, sesi dicabut/kedaluwarsa, token ditolak, debug token,
+  password, user/role/claim, robot, SMTP/storage/log settings, hapus di registry/NuPak/object storage).
+- **Fase 6:** `ClientLogProvider`/`ClientLogFolder`/`ClientLogShipper` di `Em.Ui.Core`, hook WPF dan MAUI
+  (exception tak tertangani, ganti user, kirim sebelum sign-out, menu tool buka folder log).
+- **Fase 7:** `LogStoreRegistry`, `LogStorePrepare` (Connect, Create database, Schema, Upgrade, Grant runtime user,
+  Verify), `LogSecrets` (AES-GCM), `AuditShipper`, override `EM_LOG_DB_CONNECTION`/`EM_LOG_DB_PROVIDER`.
+- **Fase 8:** layar WPF **Log Manager** (`admin.logmanager`; tab Summary, Audit, Security, Errors, Log, Settings
+  dengan Database dan Retention), tab **Activity** User Editor (`UserActivityVm`), `LogRetention` +
+  job harian + preview.
+- **Fase 9:** skrip MySQL/PostgreSQL, unit test (`tests/Em.Api.Core.Tests/Log/`), test integrasi per provider
+  (`LogStoreIntegrationTests`), `ClientLogTests`, `LogManagerTests` (WPF).
+- **Fase 10:** panduan `doc/engine/engine-log.md` (+ tautan di `doc/engine/README.md`), README, `tests/README.md`,
+  `claude.md`, status catatan ide.
+
+### Penyimpangan dari plan
+
+- **Nama kolom** mengikuti Dahlia penuh `cLog<Tabel><Field>` untuk semua kolom (mis. `cLogAuditSeq`,
+  `cLogAuditTime`), bukan `nLogAuditSeq`/`dLogAuditTime` seperti tertulis di §4.
+- **Nama action:** save store dan retensi menjadi `PostGetMeta_LogStoreSave` dan `PostGetMeta_LogRetentionSave`
+  (mengembalikan view terbaru). Tambahan: `GetMeta_LogSignInFailures` (tab Security) dan
+  `IAuditServices.GetMeta_AuditActivity_ByTarget` (tab Activity User Editor).
+- **Modul:** action Log Manager di modul `core.log`, action audit modul di `core.audit`.
+- **`GetMeta_LogAudit`** tidak memakai atribut claim; action memeriksa sendiri sehingga pemegang
+  `Log Security Read` saja bisa membaca `System.Auth`/`System.Password`.
+- **Store terpisah** tidak didaftarkan lewat `AddExtraDbConn`; `LogStoreRegistry` membuat context sendiri.
+- **Sebagian audit sistem** (sign-in gagal, sign-out, token ditolak, hapus di registry/NuPak/object storage) memakai
+  `WriteNowAsync` karena tidak ada perubahan data EF di request yang sama atau perubahan memakai jalur bulk.
+- **`.gitignore`** diberi pengecualian untuk `src/backend/Em.Api.Core/Api/Log/` dan `tests/Em.Api.Core.Tests/Log/`
+  (pola `[Ll]og/` bawaan Visual Studio mengabaikannya).
+
+### Status pengujian
+
+- `dotnet test --solution src/backend/Em.Api.slnx`: **269 lulus, 0 skip** dengan SQL Server 2022 (docker),
+  PostgreSQL 16 dan MySQL 8 lokal di container (`EM_TEST_DB_SERVER/USER/PASSWORD`, `EM_TEST_PG`, `EM_TEST_MYSQL`).
+- `Em.Ui.Core.Tests`: 17 lulus. `Em.Ui.Wpf.Core` dan testnya **terkompilasi** (`EnableWindowsTargeting`), belum
+  dijalankan (butuh Windows). MAUI **belum dibangun** (tidak ada workload di container).
+- Smoke HTTP di luar repo (`../.artefacts/em-system/scripts/log-smoke/`) terhadap host `Em.Api` hidup: semua lulus
+  dengan store internal SQL Server, dengan store PostgreSQL lewat `EM_LOG_DB_CONNECTION` (shipper memindahkan
+  outbox SQL Server → PostgreSQL; fallback segmen disk diuji dengan mematikan PostgreSQL lalu menyalakannya lagi),
+  serta Test/Prepare/Save store MySQL lewat Log Manager lalu restart host dengan MySQL sebagai write store.
+- Semua skrip SQL dijalankan pada SQL Server 2022, PostgreSQL 16, dan MySQL 8 (070 dan 071 dijalankan dua kali
+  di PostgreSQL/MySQL untuk memastikan idempoten).
+- **Belum diuji (menunggu pengguna di Windows):** layar Log Manager (render, interaksi, tema gelap), tab Activity
+  User Editor, hook log klien WPF (folder outbox, kirim sebelum sign-out, menu buka folder log), dan seluruh hook
+  MAUI.
+

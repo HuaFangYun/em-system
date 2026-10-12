@@ -15,6 +15,8 @@ public partial class EmAppBuilder
 
    /// <summary>Register module infrastructure while keeping the service collection builder-only.</summary>
    public void AddSingleton<T>(Func<IServiceProvider, T> factory) where T : class => Services.AddSingleton(factory);
+   /// <summary>Registers a scoped module helper, e.g. a module audit class such as <c>InvoiceAudit</c>.</summary>
+   public void AddScoped<T>() where T : class => Services.AddScoped<T>();
    /// <summary>Registers a hosted background service.</summary>
    public void AddHostedService<T>() where T : class, IHostedService => Services.AddHostedService<T>();
 

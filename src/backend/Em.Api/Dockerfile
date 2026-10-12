@@ -20,6 +20,10 @@ WORKDIR /src
 COPY Directory.Build.props ./
 COPY src/shared/Em.Libs/ src/shared/Em.Libs/
 COPY src/backend/Em.Api.Core/ src/backend/Em.Api.Core/
+# Log store scripts embedded by Em.Api.Core (Log Manager > Prepare).
+COPY doc/sqlscript/mssql/tables/071-log-store.sql doc/sqlscript/mssql/tables/
+COPY doc/sqlscript/mysql/tables/071-log-store.sql doc/sqlscript/mysql/tables/
+COPY doc/sqlscript/postgresql/tables/071-log-store.sql doc/sqlscript/postgresql/tables/
 COPY src/modules/Em.Test/Em.Test.Models/ src/modules/Em.Test/Em.Test.Models/
 COPY src/modules/Em.Test/Em.Test.Api/ src/modules/Em.Test/Em.Test.Api/
 COPY src/backend/Em.Api/ src/backend/Em.Api/

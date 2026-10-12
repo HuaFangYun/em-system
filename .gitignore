@@ -31,6 +31,9 @@ bld/
 [Oo]bj/
 [Ll]og/
 [Ll]ogs/
+# Source folders of the log engine (not build logs)
+!src/backend/Em.Api.Core/Api/Log/
+!tests/Em.Api.Core.Tests/Log/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/

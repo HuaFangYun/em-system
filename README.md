@@ -67,7 +67,9 @@ in `dotnet publish`. The environment variables `EM_DB_CONNECTION_STRING`, `EM_DB
 `EM_ADMIN_INITIAL_PASSWORD` and `EM_DEBUG_TOKEN` override the file, and `EM_API_CONFIG` can point to a file
 elsewhere. The sample test module is off unless `"modules": { "test": true }` or `EM_MODULE_TEST=true` is set.
 Object storage is on and needs `tables/060-objectstore.sql` with its views; turn it off with
-`"modules": { "objectStorage": false }` or `EM_MODULE_OBJECTSTORAGE=false`. In deployments, supply secrets
+`"modules": { "objectStorage": false }` or `EM_MODULE_OBJECTSTORAGE=false`. The log engine (audit, telemetry, Log
+Manager) is on and needs `tables/070-log-audit.sql` and `071-log-store.sql`; turn it off with
+`"modules": { "logServer": false }` or `EM_MODULE_LOGSERVER=false`. In deployments, supply secrets
 through the server's secret manager.
 
 More details, including the container image and Docker Compose: [src/backend/README.md](src/backend/README.md).

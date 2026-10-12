@@ -20,6 +20,12 @@ namespace Em.Api.Core.IntegrationTests
       /// <summary>The environment variable to change the server, default <c>(local)</c>.</summary>
       public const string ServerVariable = "EM_TEST_DB_SERVER";
 
+      /// <summary>Optional SQL login instead of Windows Authentication.</summary>
+      public const string UserVariable = "EM_TEST_DB_USER";
+
+      /// <summary>Password of <see cref="UserVariable"/>.</summary>
+      public const string PasswordVariable = "EM_TEST_DB_PASSWORD";
+
       /// <summary>The database name prefix, so leftovers from an interrupted run are easy to recognize and clean up.</summary>
       public const string DatabasePrefix = "EmSystem_IntegrationTest_";
 
@@ -42,14 +48,21 @@ namespace Em.Api.Core.IntegrationTests
 
       public async ValueTask InitializeAsync() {
          var server = Environment.GetEnvironmentVariable(ServerVariable) is { Length: > 0 } value ? value : "(local)";
+         // SQL authentication is optional (EM_TEST_DB_USER / EM_TEST_DB_PASSWORD), e.g. for a SQL Server container
+         // on a machine without Windows Authentication; by default the Windows account is used.
+         var sqlUser = Environment.GetEnvironmentVariable(UserVariable);
          var builder = new SqlConnectionStringBuilder {
             DataSource = server,
             InitialCatalog = "master",
-            IntegratedSecurity = true,
+            IntegratedSecurity = string.IsNullOrWhiteSpace(sqlUser),
             // Local instances use a self-signed certificate, which SqlClient refuses by default.
             TrustServerCertificate = true,
             ConnectTimeout = 5
          };
+         if (!builder.IntegratedSecurity) {
+            builder.UserID = sqlUser;
+            builder.Password = Environment.GetEnvironmentVariable(PasswordVariable) ?? "";
+         }
          masterConnectionString = builder.ConnectionString;
          var name = DatabasePrefix + Guid.NewGuid().ToString("N");
 
