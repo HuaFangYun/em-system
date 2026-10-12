@@ -106,6 +106,8 @@ Keputusan pengguna 2026-10-12:
 6. **Database store log diatur dari Log Manager:** pilih database internal (yang dipakai API) atau koneksi baru
    dengan provider MSSQL/MySQL/PostgreSQL dan credential, lalu tombol **Prepare** membangun database-nya
    (lihat bagian "Database store log").
+7. **Satu request menyimpan ke dua database:** developer modul yang menentukan entry audit ditulis ke database
+   mana (lihat bagian "Audit ke database mana").
 
 Rincian lain di catatan ini masih usulan.
 
@@ -1509,3 +1511,31 @@ Catatan:
 - Password yang dicoba tidak pernah dicatat.
 - Client WPF: saat `SessionEnded` terjadi (token kedaluwarsa/ditolak), client tidak perlu melapor; server yang
   mencatat penyebabnya.
+
+### Audit ke database mana (keputusan 2026-10-12)
+
+Keputusan pengguna: bila satu request menyimpan ke dua database, **developer modul yang bertanggung jawab**
+menentukan ke mana entry audit ditulis. Engine tidak menebak.
+
+```csharp
+public partial class InvoiceServices(InvoiceDbContext ctx, StockDbContext stock, InvoiceAudit audit) : ServicesBase
+{
+   [PostAction(claim: InvoiceClaims.Post)]
+   public async Task PostInvoice_Post(string cInvoiceId) {
+      // ... ubah status invoice di ctx, kurangi stok di stock ...
+      audit.Use(ctx).Posted(inv);            // entry ikut transaksi InvoiceDbContext
+      await ctx.SaveChangesAsync();
+      await stock.SaveChangesAsync();
+   }
+}
+```
+
+Aturan engine:
+
+- **Satu database dalam request** (kasus umum): tidak perlu `Use(...)`; entry ikut `SaveChanges` berikutnya.
+- **Lebih dari satu context menyimpan** sementara masih ada entry yang belum diarahkan: engine **menolak dengan
+  exception** pada `SaveChanges` context kedua, dengan pesan yang menyebut entry dan context-nya. Tidak ada
+  tebakan diam-diam, sehingga kesalahan terlihat saat pengujian.
+- `Use(ctx)` mengarahkan entry ke context tertentu; database itu harus sudah punya tabel audit (skrip/Prepare).
+- Konsistensi lintas dua database (satu berhasil, satu gagal) tetap tanggung jawab developer, sama seperti data
+  modulnya sendiri; audit hanya mengikuti transaksi database yang dipilih.
