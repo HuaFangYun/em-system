@@ -1262,3 +1262,104 @@ await _audit.PostMeta_AuditEntry("Invoice", invoiceId, "exported", detail: "Exce
 1. Tahap pertama cukup level 1 (`AddEntry` di server), lalu diff otomatis menyusul?
 2. Kejadian dari UI (lihat, cetak lokal, ekspor) dibutuhkan? Bila ya, "dibuka/dilihat" ikut dicatat? Volumenya
    besar dan menyentuh privasi.
+
+### Modul mendaftarkan audit entry di builder + class audit per modul dari DI (2026-10-12)
+
+Usulan pengguna: satu modul cukup **mendaftarkan audit entry di builder**, lalu di action memanggil helper
+bertipe milik modul, mis. `InvoiceAudit.NewInvoice(entity)` di `PostInvoice_New()`. `InvoiceAudit` **diambil
+dari DI**. Ini menjadi bentuk utama level 1; diff otomatis (registrasi entitas) tetap opsional.
+
+**1. Registrasi di builder modul**: katalog kejadian, mirip katalog claim (`AddClaims`) yang dibekukan saat start.
+
+```csharp
+public static void AddInvoiceModule(this EmAppBuilder builder) {
+   builder.AddDbContext<InvoiceDbContext>();
+   builder.AddAudit("Invoice", a => a
+      .Title("Invoice")
+      .Entry("created",  "Membuat invoice")
+      .Entry("updated",  "Mengubah invoice")
+      .Entry("posted",   "Mem-post invoice")
+      .Entry("voided",   "Membatalkan invoice", requireReason: true)
+      .Entry("printed",  "Mencetak invoice")
+      .Entry("exported", "Mengekspor invoice", fromClient: true)      // boleh dikirim dari UI
+      .CanRead(c => c.HasClaim(InvoiceClaims.View)));
+   builder.Services.AddScoped<InvoiceAudit>();
+}
+```
+
+Manfaat katalog: Log Manager dan flyout tahu daftar kejadian beserta labelnya (untuk filter dan teks), kejadian
+yang tidak terdaftar ditolak, alasan wajib ditegakkan engine, dan hanya kejadian `fromClient` yang boleh
+dikirim dari UI.
+
+**2. Class audit milik modul** (ditulis modul, membungkus `IAuditWriter` dari engine):
+
+```csharp
+public sealed class InvoiceAudit(IAuditWriter audit)
+{
+   private const string Group = "Invoice";
+
+   public void NewInvoice(ta_Invoice inv, IReadOnlyList<ta_InvoiceLine> lines, string customerName) =>
+      audit.AddEntry(Group, inv.cInvoiceId, "created", docNo: inv.cInvoiceNo,
+         summary: $"Membuat invoice {inv.cInvoiceNo} untuk {customerName}, {lines.Count} baris, total {inv.nTotal:N0}",
+         snapshot: new { inv, lines });
+
+   public void Changed(ta_Invoice before, ta_Invoice after) =>
+      audit.AddEntry(Group, after.cInvoiceId, "updated", docNo: after.cInvoiceNo,
+         changes: AuditDiff.Of(before, after, ignore: ["ustamp", "datestamp", "json_object"]));
+
+   public void Posted(ta_Invoice inv) =>
+      audit.AddEntry(Group, inv.cInvoiceId, "posted", docNo: inv.cInvoiceNo, snapshot: inv);
+
+   public void Voided(ta_Invoice inv, string reason) =>
+      audit.AddEntry(Group, inv.cInvoiceId, "voided", docNo: inv.cInvoiceNo, reason: reason);
+}
+```
+
+`AuditDiff.Of(before, after)` adalah helper engine untuk membuat daftar perubahan field secara manual, tanpa
+registrasi entitas.
+
+**3. Pemakaian di service** (konstruktor primer, seperti `TestServices(TestDbContext ctx)`):
+
+```csharp
+[Module("Invoice")]
+public partial class InvoiceServices(InvoiceDbContext ctx, InvoiceAudit audit) : ServicesBase
+{
+   [PostAction(claim: InvoiceClaims.Edit)]
+   public async Task PostInvoice_New(InvoiceSaveDto data) {
+      var inv = data.Header; var lines = data.Lines;
+      ctx.ta_Invoices.Add(inv);
+      ctx.ta_InvoiceLines.AddRange(lines);
+      audit.NewInvoice(inv, lines, data.CustomerName);
+      await ctx.SaveChangesAsync();        // invoice + entry audit: satu transaksi
+   }
+
+   [PostAction(claim: InvoiceClaims.Void)]
+   public async Task PostInvoice_Void(string cInvoiceId, string reason) {
+      var inv = await ctx.ta_Invoices.SingleAsync(r => r.cInvoiceId == cInvoiceId, AbortToken);
+      inv.cInvoiceStatus = InvoiceStatus.Void;
+      audit.Voided(inv, reason);
+      await ctx.SaveChangesAsync();
+   }
+}
+```
+
+**Cara kerja di balik layar**
+
+- `IAuditWriter` di-scope per request. `AddEntry` hanya **menitipkan** entry, lalu engine menuliskannya pada
+  `SaveChanges` berikutnya dalam request itu, di transaksi yang sama. Engine bisa memasang interceptor-nya ke
+  setiap DbContext modul karena semua context didaftarkan lewat `EmAppBuilder.AddDbContext`.
+- User, waktu, alamat, `requestId`, dan aplikasi diisi engine, bukan oleh modul.
+- `AddEntry` harus dipanggil **sebelum** `SaveChanges`. Bila request selesai dengan entry yang belum tertulis
+  (lupa `SaveChanges` atau dipanggil sesudahnya), engine mencatat error diagnostik agar bug modul terlihat saat
+  pengujian.
+- Kejadian yang tidak terdaftar, atau `voided` tanpa alasan, langsung melempar exception di `AddEntry`, sebelum
+  data tersimpan.
+
+### Pertanyaan terbuka (audit per modul)
+
+1. **Database modul:** tabel audit lokal (outbox) harus berada di database yang sama dengan data modul agar
+   satu transaksi. Bila `InvoiceDbContext` memakai database lain (`AddExtraDbConn`), tabel audit juga dibuat di
+   sana (skrip/Prepare per database)?
+2. Satu request menyimpan ke dua DbContext/database berbeda: entry ikut `SaveChanges` context yang mana? Usulan:
+   `AddEntry` menerima context secara eksplisit untuk kasus ini, bawaan context pertama yang menyimpan.
+3. Perlu snapshot di setiap `created`/`posted`, atau modul yang memutuskan per kejadian (seperti contoh)?
