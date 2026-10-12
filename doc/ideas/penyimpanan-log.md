@@ -1203,3 +1203,62 @@ builder.AddEntityAudit("User", g => g
   di model EF, mis. `["U014","R-FIN"]`. Modul tidak merangkainya sendiri.
 - Bila suatu saat approval dipakai untuk dokumen yang sama, cukup dipastikan kedua engine menghasilkan bentuk
   kunci yang sama; itu urusan integrasi, bukan prasyarat log engine.
+
+### Kenapa ditulis di backend, bukan dari UI (diskusi 2026-10-12)
+
+Pertanyaan pengguna: kenapa audit didefinisikan di backend, bukan lewat service di UI seperti
+`Audit.AddEntry("Invoice", "CreateNew", ...)`?
+
+Alasan audit data ditulis di server:
+
+1. **UI bisa dilewati.** Action bisa dipanggil langsung oleh Postman, robot, integrasi, MAUI, atau aplikasi lain.
+   Bila audit ditulis UI, perubahan dari jalur lain tidak tercatat.
+2. **Tidak atomik.** Save dan `AddEntry` menjadi dua request. Save berhasil tetapi `AddEntry` gagal (jaringan
+   putus, aplikasi ditutup) berarti audit hilang; `AddEntry` berhasil tetapi save gagal berarti audit palsu. Di
+   server keduanya satu transaksi.
+3. **Diff yang benar hanya ada di server.** UI hanya tahu isi form-nya; nilai lama yang sebenarnya ada di
+   database (bisa sudah diubah user lain sejak form dibuka).
+4. **Bukti, bukan klaim.** Isi yang dikirim client bisa diubah. Prinsip yang sama sudah dipakai `RequestTrace`:
+   log yang mencatat klaim sebagai fakta lebih buruk daripada log yang diam.
+
+Namun gaya `AddEntry` tetap dipakai, dalam dua tempat:
+
+**a. Di server, tanpa registrasi (level paling sederhana).** Modul cukup memanggil `AddEntry` di action-nya,
+tanpa `AddEntityAudit`. Tidak ada diff otomatis; modul mengisi detail sendiri. Registrasi hanya diperlukan bila
+ingin diff otomatis.
+
+```csharp
+[PostAction(claim: InvoiceClaims.Edit)]
+public async Task PostInvoice_New(InvoiceSaveDto data) {
+   // ... simpan invoice ...
+   Audit.AddEntry("Invoice", data.cInvoiceId, "created", docNo: data.cInvoiceNo,
+      summary: $"Membuat invoice {data.cInvoiceNo}, total {data.nTotal:N0}");
+   await ctx.SaveChangesAsync();              // entry ikut transaksi yang sama
+}
+```
+
+| Level | Yang ditulis modul | Hasil |
+|---|---|---|
+| 1. `AddEntry` saja | Satu baris per kejadian | Timeline kejadian dengan ringkasan buatan modul |
+| 2. Registrasi entitas | Registrasi sekali | Level 1 + diff field otomatis untuk setiap insert/update/delete |
+
+**b. Dari UI, untuk kejadian yang memang hanya terjadi di client.** Contoh: invoice dibuka/dilihat, dicetak
+ke printer lokal, diekspor ke Excel, dikirim lewat email dari PC pengguna. Server tidak melihat kejadian ini,
+jadi UI yang melapor:
+
+```csharp
+await _audit.PostMeta_AuditEntry("Invoice", invoiceId, "exported", detail: "Excel, 1 halaman");
+```
+
+- Server tetap mengisi sendiri user, waktu, alamat, dan aplikasi; nilai itu tidak diambil dari client.
+- Entry ditandai `source = client` sehingga Log Manager dan flyout bisa membedakannya dari kejadian yang
+  dibuktikan server.
+- Hak: user hanya boleh menulis entry untuk dokumen yang boleh ia baca (`CanRead`); kejadian bebas
+  ditentukan modul (daftar `kind` yang diizinkan dari client).
+- Bila request gagal, UI boleh mencoba lagi; kehilangan sesekali dapat diterima untuk jenis kejadian ini.
+
+### Pertanyaan terbuka (AddEntry)
+
+1. Tahap pertama cukup level 1 (`AddEntry` di server), lalu diff otomatis menyusul?
+2. Kejadian dari UI (lihat, cetak lokal, ekspor) dibutuhkan? Bila ya, "dibuka/dilihat" ikut dicatat? Volumenya
+   besar dan menyentuh privasi.
