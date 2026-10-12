@@ -208,6 +208,7 @@ bersama, tetapi sumber kebenarannya tetap di database.
 | 8 | **Proses / job** | Catatan | Output satu run publish, maintenance object storage, task bisnis | Eksplisit, runner | Per run: status, mulai/selesai, baris output | Pengguna yang menjalankan, admin | Per jumlah run / 90 hari |
 | 9 | **Komunikasi keluar** | Catatan | Email terkirim/gagal (SMTP), webhook/HTTP ke pihak luar | Eksplisit, engine | Tetap: tujuan, subjek, status, percobaan | Admin, support | 90 hari-1 tahun |
 | 10 | **Aktivitas pengguna** (opsional) | Telemetry | Buka layar, pakai fitur | Otomatis, navigasi UI | Tetap | Produk | 30-90 hari |
+| 11 | **Riwayat dokumen** | Catatan | Invoice dibuat, diubah, di-post, dicetak, di-void | Otomatis (diff) + eksplisit | Tetap: dokumen, kejadian, diff field | Pengguna bisnis, auditor | Seumur dokumen (lihat bagian "Log dokumen") |
 
 Catatan per jenis:
 
@@ -239,10 +240,89 @@ request tidak pernah masuk event; nilai lama/baru di audit untuk field rahasia d
 
 ### Pertanyaan terbuka (jenis log)
 
-1. Apakah sepuluh jenis ini lengkap, atau ada jenis yang dibutuhkan aplikasi turunan (OshaApp, EmPorium)
+1. Apakah sebelas jenis ini lengkap, atau ada jenis yang dibutuhkan aplikasi turunan (OshaApp, EmPorium)
    yang belum tercakup?
 2. Jenis mana yang masuk **tahap pertama**? Usulan: 1, 2, 3 (telemetry dasar) + 6, 7 (sudah ada kebutuhan
    nyata: impersonasi dan perubahan user).
 3. Keamanan dan audit: satu tabel dengan `Kind` atau dua tabel?
 4. Aktivitas pengguna (10): masuk cakupan atau dibuang?
 5. Apakah metrik (5) bagian dari engine ini, atau diserahkan ke Prometheus/OTel collector?
+
+## Log dokumen (usulan 2026-10-12)
+
+Permintaan pengguna: karena em-system dipakai untuk ERP, perlu **log terhadap dokumen**, misalnya user membuat
+invoice baru lalu mengubahnya. Ini menjadi jenis **11. Riwayat dokumen** di keluarga *catatan*. Jenis ini
+dipisah dari audit (7). Audit menjawab "apa yang dilakukan user/admin pada sistem". Riwayat dokumen menjawab
+"apa yang terjadi pada dokumen ini", dibaca dari layar dokumen itu sendiri oleh pengguna bisnis.
+
+### Identitas dokumen
+
+Pakai identitas yang sudah dipakai engine approval: `docType` dari daftar jenis dokumen aplikasi dan kunci
+dokumen berupa `record` bertanda `[KeyPart(n)]` (lihat `doc/engine/engine-approval.md`). Tambahan:
+
+- `docNo`: nomor dokumen yang dibaca manusia (mis. `INV/2026/10/0012`), disimpan apa adanya saat kejadian.
+- Opsional `company`/`branch` bila modul ERP memakai pemisahan itu, untuk filter dan hak baca.
+
+### Jenis kejadian
+
+| Kejadian | Contoh | Isi yang dicatat |
+|---|---|---|
+| `created` | Invoice baru dibuat | Snapshot awal (header + baris) |
+| `updated` | Ubah customer, qty baris 2, tambah baris | Diff per field: header dan baris (baris ditambah/dihapus/diubah) |
+| `status` | draft -> submitted -> approved -> posted | Status lama/baru, alasan bila ada |
+| `approval` | Langkah approval ditandatangani/ditolak | Dari engine approval: langkah, penanda tangan, komentar |
+| `voided` / `cancelled` / `deleted` | Invoice dibatalkan | Alasan **wajib**, snapshot terakhir |
+| `output` | Dicetak, diekspor PDF, dikirim email | Format, tujuan, cetakan ke-berapa, snapshot saat itu |
+| `attachment` | Lampiran ditambah/dihapus | Nama berkas, id object storage |
+| `comment` | Catatan bebas user | Teks |
+| `linked` | Invoice dibuat dari Sales Order / DO | Dokumen asal (docType + key + docNo) |
+
+### Bentuk data
+
+- Header kejadian: waktu (UTC), `docType`, kunci, `docNo`, kejadian, user, `actingAs`, alamat, `requestId`,
+  alasan/komentar.
+- Diff field (tabel anak): bagian (`header` atau nama koleksi baris + kunci baris), field, nilai lama, nilai
+  baru, **dan teks tampilan lama/baru**. Teks tampilan disimpan karena master bisa berubah kemudian. Contoh:
+  customer `C001` ditulis juga sebagai "PT Maju Jaya" saat itu.
+- Snapshot JSON penuh hanya pada titik penting (`created`, `posted`, `output`, `voided`), supaya "isi
+  invoice yang dicetak dulu" bisa ditampilkan lagi persis, tanpa menyimpan snapshot setiap edit.
+- Field rahasia atau berisik (`ustamp`, `datestamp`, kolom teknis) dikecualikan lewat deklarasi.
+
+### Cara menulis (usulan)
+
+Gabungan dua cara:
+
+1. **Diff otomatis** untuk `created`/`updated`/`deleted`: modul mendaftarkan jenis dokumen beserta entitas
+   header dan barisnya (mis. `AddDocumentLog<InvoiceKey>("Invoice", d => d.Header<Invoice>().Lines<InvoiceLine>(...))`).
+   Interceptor `SaveChanges` EF Core membaca `ChangeTracker` dan menulis diff **dalam transaksi yang sama**.
+   Modul tidak perlu menulis kode log untuk edit biasa dan tidak ada perubahan yang terlewat.
+2. **Kejadian bisnis eksplisit** untuk yang bukan sekadar perubahan field: `posted`, `voided`, `output`,
+   `comment`, `linked`. Ditulis lewat service, mis. `DocumentLog.Record(docType, key, "posted", reason)`.
+   Engine approval otomatis menulis kejadian `approval`.
+
+Alternatif yang dipertimbangkan: temporal table / CDC SQL Server. Keduanya memberi versi baris secara gratis,
+tetapi tanpa "siapa dan kenapa", tanpa kejadian bisnis, dan sulit dirangkai menjadi satu dokumen
+(header + baris). Bisa dipakai sebagai pelengkap, bukan pengganti.
+
+### Membaca
+
+- Control WPF generik **"Riwayat"** (timeline) yang bisa ditempel ke layar dokumen mana pun: daftar kejadian,
+  klik untuk melihat diff, tombol "lihat versi saat itu" untuk snapshot.
+- Hak baca mengikuti hak baca dokumennya: siapa yang boleh membuka invoice boleh melihat riwayatnya.
+- Laporan lintas dokumen (mis. "semua invoice yang di-void bulan ini") lewat query di tabel yang sama.
+
+### Retensi
+
+Ikuti umur dokumennya, bukan retensi log. Dokumen pembukuan di Indonesia wajib disimpan 10 tahun (UU KUP
+Pasal 28; verifikasi ke sumber resmi). Usulan: riwayat dokumen tidak pernah dihapus selama dokumennya ada,
+dan pengarsipan ke storage lain dibahas terpisah bila volumenya besar.
+
+### Pertanyaan terbuka (log dokumen)
+
+1. Selain dokumen transaksi (invoice, SO, PO), apakah **master data** (customer, item, harga) juga perlu
+   riwayat dengan mekanisme yang sama?
+2. Diff otomatis lewat EF Core interceptor: apakah semua modul ERP menyimpan lewat EF Core, atau ada yang lewat
+   stored procedure/SQL langsung (yang tidak terlihat oleh interceptor)?
+3. Cetak ulang: perlu dicatat setiap kali dan ditandai "cetakan ke-n / copy"?
+4. Satu tabel riwayat untuk semua jenis dokumen (dipartisi), atau tabel per modul?
+5. Apakah user boleh menulis komentar bebas di riwayat, atau riwayat murni otomatis?
