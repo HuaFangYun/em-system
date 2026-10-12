@@ -1041,3 +1041,121 @@ membawa `DocNo` untuk ditampilkan dan `DocKey` untuk membuka Invoice Editor saat
 
 Kode server modul (mis. laporan) memakai pembaca yang sama tanpa HTTP, mis. `IAuditReader` lewat DI, dengan
 method yang sama tanpa prefix `GetMeta_`.
+
+## Cara kerja 3: audit User Manager (contoh asumsi, 2026-10-12)
+
+Pertanyaan pengguna: bagaimana mendaftarkan audit untuk User Manager dan bagaimana tercatat saat admin
+menambah user. Nama API tetap asumsi. Kebutuhan ini sama dengan tab Activity User Editor yang masih mockup
+tersembunyi ([user-editor-activity.md](user-editor-activity.md)); audit data menjadi sumber datanya.
+
+### Bedanya dengan Invoice
+
+- User Manager adalah fitur **engine** (`CredentialServices` di `Em.Api.Core`), bukan modul. Registrasinya
+  dilakukan engine sendiri saat inisialisasi inti, bukan di `Program.cs` host, sehingga setiap aplikasi
+  mendapat audit akun tanpa langkah tambahan.
+- User adalah **master data**, bukan dokumen transaksi: tidak ada nomor dokumen, post, atau cetak. Mekanisme
+  sama, kelompoknya bernama `User` dengan kunci `cUserId`.
+- Data user tersebar di beberapa tabel, dan **contact tidak menunjuk ke user**: `ta_User.cContactId` yang
+  menunjuk ke contact, dan satu contact bisa dipakai lebih dari satu user (`GetTa_Users_ByContactId`).
+  Perubahan contact/alamat/komunikasi harus dipetakan ke user lewat query, bukan lewat kolom `cUserId`.
+- Ada **data rahasia**: `ta_UserCredential.cCredentialSecret` (hash password/secret) tidak boleh masuk audit.
+
+### Registrasi (di inti engine)
+
+```csharp
+builder.AddEntityAudit<UserKey>("User", g => g
+   .Root<ta_User>(u => new UserKey(u.cUserId), title: u => u.cUserAccount)
+   .Child<ta_UserRole>(r => new UserKey(r.cUserId), rowKey: r => r.cRoleId)
+   .Child<ta_UserClaim>(c => new UserKey(c.cUserId), rowKey: c => c.cClaimKey)
+   .Child<ta_UserCredential>(c => new UserKey(c.cUserId), rowKey: c => c.cCredentialType)
+   // contact, alamat, komunikasi tidak punya cUserId: peta ke user lewat query
+   .Related<ta_Contact>((db, c) => db.ta_Users.Where(u => u.cContactId == c.cContactId).Select(u => new UserKey(u.cUserId)))
+   .Related<ta_Address>((db, a) => db.ta_Users.Where(u => u.cContactId == a.cContactId).Select(u => new UserKey(u.cUserId)))
+   .Related<ta_Comm>((db, m) => db.ta_Users.Where(u => u.cContactId == m.cContactId).Select(u => new UserKey(u.cUserId)))
+   .Display<ta_UserRole>(r => r.cRoleId,
+      (db, id) => db.ta_Roles.Where(x => x.cRoleId == id).Select(x => x.cRoleName))
+   .Secret<ta_UserCredential>(c => c.cCredentialSecret, c => c.cCredentialKey)   // dicatat "diset/diubah" saja
+   .Label<ta_User>(u => u.cUserIsAdmin, "Administrator")
+   .Label<ta_User>(u => u.cUserState, "Status akun")
+   .Ignore("ustamp", "datestamp", "json_object")
+   .CanRead(c => c.HasClaim(UserManagerClaims.Access)));
+```
+
+`Related` membuat perubahan pada contact bersama muncul di riwayat **setiap** user yang memakai contact itu.
+
+### Saat admin menambah user
+
+`PostTa_User_New` tidak perlu diubah. Method itu sudah memakai satu transaksi eksplisit dengan empat kali
+`SaveChangesAsync` (contact, lalu alamat + komunikasi, lalu user, lalu credential). Aturan pengelompokan:
+
+- **Satu change set per transaksi database.** Bila ada transaksi eksplisit, semua `SaveChanges` di dalamnya masuk
+  ke change set yang sama; tanpa transaksi eksplisit, satu `SaveChanges` = satu change set.
+- Baris audit ditulis di transaksi yang sama, jadi bila `RollbackAsync` terjadi (mis. credential gagal), audit
+  ikut batal. Tidak ada riwayat "user dibuat" untuk user yang tidak jadi dibuat.
+
+Contoh: admin `aan` membuat akun `budi` dengan contact baru, lalu memberi role Finance (action
+`PostTa_UserRole_New` terpisah, change set kedua).
+
+**ChangeSet**
+
+| Seq | Waktu (UTC) | User | Request | Kelompok |
+|---|---|---|---|---|
+| 2210 | 2026-10-12 04:02:11 | U000 aan | srv-app-01:0009C | User U014 (budi) |
+| 2211 | 2026-10-12 04:02:40 | U000 aan | srv-app-01:0009E | User U014 (budi) |
+
+**Diff change set 2210**
+
+```json
+[
+  { "entity": "ta_Contact", "key": "CT-0301", "op": "insert", "fields": [
+      { "f": "cContactFullName", "new": "Budi Santoso" },
+      { "f": "cContactType", "new": "Person" } ] },
+  { "entity": "ta_Comm", "key": "CM-0877", "op": "insert", "fields": [
+      { "f": "cCommType", "new": "Email" }, { "f": "cCommValue", "new": "budi@contoh.co.id" } ] },
+  { "entity": "ta_Address", "key": "AD-0412", "op": "insert", "fields": [ "..." ] },
+  { "entity": "ta_User", "key": "U014", "op": "insert", "fields": [
+      { "f": "cUserAccount", "label": "Akun", "new": "budi" },
+      { "f": "cUserState", "label": "Status akun", "new": "Active" },
+      { "f": "cUserIsAdmin", "label": "Administrator", "new": false } ] },
+  { "entity": "ta_UserCredential", "key": "U014/Password", "op": "insert", "fields": [
+      { "f": "cCredentialSecret", "label": "Password", "secret": true, "new": "(diset)" } ] }
+]
+```
+
+**Diff change set 2211**
+
+```json
+[
+  { "entity": "ta_UserRole", "key": "U014/R-FIN", "op": "insert", "fields": [
+      { "f": "cRoleId", "label": "Role", "new": "R-FIN", "newText": "Finance" },
+      { "f": "cUserRoleExpiry", "label": "Berlaku sampai", "new": "2026-12-31" } ] }
+]
+```
+
+### Tampil di tab Activity User Editor
+
+Action yang sama dengan dokumen, kelompok `User`: `GetMeta_AuditActivity_ByDoc("User", userKey, null, 30)`:
+
+```
+04:02  aan  Memberi role Finance (berlaku sampai 31-12-2026)
+04:02  aan  Membuat akun budi
+            • Nama: Budi Santoso   • Email: budi@contoh.co.id
+            • Status akun: Active  • Administrator: tidak
+            • Password diset
+```
+
+Kejadian lain untuk tab ini:
+
+- Ubah status (Active -> Suspended), saklar administrator, ubah/cabut role: otomatis dari diff.
+- Reset password oleh admin: diff credential (rahasia) + kejadian eksplisit `password.reset` dengan alasan.
+- Sign-in berhasil/gagal dan token dicabut: bukan audit data, melainkan **log keamanan** (jenis 6) dengan target
+  user yang sama. Tab Activity bisa menggabungkan keduanya menurut waktu (pertanyaan terbuka).
+
+### Pertanyaan terbuka (audit User Manager)
+
+1. Audit akun **selalu aktif** di setiap aplikasi (tidak bisa dimatikan host), atau bisa dimatikan?
+2. Perubahan contact bersama ditampilkan di riwayat semua user yang memakainya (usulan), atau hanya dicatat di
+   kelompok `Contact` tersendiri?
+3. Tab Activity menggabungkan audit data dan log keamanan (sign-in), atau dipisah menjadi dua tab?
+4. Perubahan role dan claim role (`ta_Role`, `ta_RoleClaim`) juga diaudit sebagai kelompok `Role` tersendiri?
+   Perubahan claim sebuah role memengaruhi semua user pemegang role itu.
