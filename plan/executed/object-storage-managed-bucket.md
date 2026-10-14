@@ -276,8 +276,9 @@ diblokir policy.
 - Tidak ada perubahan tabel. `views/vi_StoreBucket.sql` diterapkan ulang ke dua database lokal pengembangan
   (Windows Authentication) dan terverifikasi; daftar target ada di catatan privat
   `..\.artefacts\em-system\config\db-migration-targets.md`.
-- **Tindakan lanjutan:** target remote belum menjalankan ulang `vi_StoreBucket.sql`. Tidak memblokir backend
-  baru (engine tidak membaca view), hanya menambah kolom `cv*` untuk pembaca SQL.
+- Atas permintaan pengguna setelah eksekusi, `vi_StoreBucket.sql` juga diterapkan ke kedua target remote dan
+  terverifikasi (kolom `cv*` ada, view terbaca, `ObjectStoreSchemaVersion` tetap 1). Semua target di catatan
+  privat kini sinkron.
 - Temuan di luar cakupan: salah satu database lokal punya skema registry lama (kolom robot di `ta_CtnManifest`
   belum ada) sehingga `Em.Api` menolak start di sana; tidak diubah, smoke memakai database lokal yang lengkap.
 
