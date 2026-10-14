@@ -35,12 +35,12 @@ public partial class StoreBucketEditor : UserControl, INavigationBody
    }
 
    private void OnObjectsDragOver(object sender, DragEventArgs args) {
-      args.Effects = args.Data.GetDataPresent(DataFormats.FileDrop) && Vm.IsBrowsing && Vm.CanBrowse ? DragDropEffects.Copy : DragDropEffects.None;
+      args.Effects = args.Data.GetDataPresent(DataFormats.FileDrop) && Vm.IsBrowsing && Vm.CanBrowse && Vm.CanChangeContents ? DragDropEffects.Copy : DragDropEffects.None;
       args.Handled = true;
    }
 
    private async void OnObjectsDrop(object sender, DragEventArgs args) {
-      if (!Vm.IsBrowsing || !Vm.CanBrowse || args.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
+      if (!Vm.IsBrowsing || !Vm.CanBrowse || !Vm.CanChangeContents || args.Data.GetData(DataFormats.FileDrop) is not string[] files) return;
       args.Handled = true;
       // Folders are not uploaded recursively; only dropped files are.
       await Vm.UploadFilesAsync(files.Where(System.IO.File.Exists).ToArray());

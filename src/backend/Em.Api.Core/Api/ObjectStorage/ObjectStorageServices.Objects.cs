@@ -7,6 +7,17 @@ public sealed partial class ObjectStorageServices
 {
    private async Task<string> BucketName(string bucketId) => (await store.RequireBucketByIdAsync(bucketId, AbortToken)).cStoreBucketName;
 
+   /// <summary>
+   /// Name of a bucket whose contents may change here; 409 for a managed bucket, whose contents belong to its
+   /// application (it still writes through <see cref="IObjectStore"/>).
+   /// </summary>
+   private async Task<string> WritableBucketName(string bucketId) {
+      var bucket = await store.RequireBucketByIdAsync(bucketId, AbortToken);
+      if (ManagedBucketJson.Owner(bucket.json_object) is { } owner)
+         throw ManagedConflict(bucket.cStoreBucketName, owner, "its contents can only be changed by that application. They can still be browsed and downloaded here.");
+      return bucket.cStoreBucketName;
+   }
+
    /// <inheritdoc />
    [GetAction(claim: IObjectStorageServices.ManagerClaim)]
    public async Task<StoreObjectListing> GetMeta_StoreObjects(string bucketId, string? prefix, string? delimiter, string? continuation, int limit) =>
@@ -21,7 +32,9 @@ public sealed partial class ObjectStorageServices
    [PostAction(claim: IObjectStorageServices.ManagerClaim)]
    public async Task<StoreObjectInfo> PostGetMeta_StoreObjectUpload(StoreUploadRequest request, Stream content) {
       ArgumentNullException.ThrowIfNull(request);
-      return await store.PutAsync(await BucketName(request.BucketId), request.Key, content, request.Mime, request.Metadata, AbortToken);
+      // Checked before the content stream is read, so a refused upload does not transfer its body.
+      var bucket = await WritableBucketName(request.BucketId);
+      return await store.PutAsync(bucket, request.Key, content, request.Mime, request.Metadata, AbortToken);
    }
 
    /// <inheritdoc />
@@ -32,7 +45,7 @@ public sealed partial class ObjectStorageServices
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.ManagerClaim)]
    public async Task PostMeta_StoreObjectDelete(string bucketId, string key) {
-      var bucket = await BucketName(bucketId);
+      var bucket = await WritableBucketName(bucketId);
       await store.DeleteAsync(bucket, key, AbortToken);
       await AuditSystemAsync("System.ObjectStorage", $"{bucket}/{key}", "object.deleted", $"Deleted object {bucket}/{key}", "object");
    }
@@ -45,12 +58,12 @@ public sealed partial class ObjectStorageServices
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.ManagerClaim)]
    public async Task<StoreObjectInfo> PostGetMeta_StoreObjectRestore(string bucketId, string key, int version) =>
-      await store.RestoreAsync(await BucketName(bucketId), key, version, AbortToken);
+      await store.RestoreAsync(await WritableBucketName(bucketId), key, version, AbortToken);
 
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.SettingsClaim)]
    public async Task PostMeta_StoreObjectVersionPurge(string bucketId, string key, int version) {
-      var bucket = await BucketName(bucketId);
+      var bucket = await WritableBucketName(bucketId);
       await store.PurgeVersionAsync(bucket, key, version, AbortToken);
       await AuditSystemAsync("System.ObjectStorage", $"{bucket}/{key}", "version.purged", $"Purged version {version} of {bucket}/{key}", "object",
          new { version });

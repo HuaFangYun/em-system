@@ -25,7 +25,8 @@ diimplementasikan; desainnya hanya menyisakan jalan untuk adapter S3 di kemudian
 2. Di host API, panggil `builder.AddObjectStorage()`. Host contoh `Em.Api` melakukannya kecuali dimatikan
    lewat saklar modul `"modules": { "objectStorage": false }` (atau `EM_MODULE_OBJECTSTORAGE=false`).
 3. Berikan claim di bawah ke administrator, buka **Object Storage Manager**, lalu buat minimal satu volume,
-   satu policy, dan satu bucket.
+   satu policy, dan satu bucket. Bucket yang dideklarasikan modul sebagai [managed bucket](#managed-bucket)
+   tidak memerlukan langkah ini: bucket itu dibuat saat startup di volume default.
 
 Startup gagal dengan pesan yang jelas bila tabel atau baris versi skema (`ObjectStoreSchemaVersion` di
 `ta_Meta`) tidak ada.
@@ -99,7 +100,9 @@ Susunan di disk:
 ## Memakai dari modul
 
 `IObjectStore` berlingkup scoped; ambil dari dependency injection di service atau request handler. Bucket
-harus sudah ada.
+harus sudah ada, kecuali [managed bucket](#managed-bucket) yang dideklarasikan modul dan dibuat engine saat
+startup. Modul yang memiliki file-nya sendiri sebaiknya mendeklarasikan managed bucket, bukan meminta
+administrator membuat bucket lalu memeriksanya saat runtime.
 
 ```csharp
 public sealed class InvoiceArchive(IObjectStore store)
@@ -138,6 +141,112 @@ bucket. Adapter ini mempertahankan aturan tanpa-timpa (key yang sudah punya vers
 409) dan `DeleteAsync` menghapus permanen semua version. Adapter ini tidak didaftarkan oleh engine dan tidak
 menggantikan binary storage milik engine approval; buat sendiri di modul yang membutuhkannya.
 
+## Managed bucket
+
+**Managed bucket** adalah bucket milik layer aplikasi (modul), bukan milik administrator. Modul
+mendeklarasikannya di builder API; saat startup object storage membuatnya, memberinya policy sendiri, dan
+menguncinya. Modul lalu membaca dan menulis lewat `IObjectStore` tanpa setup apa pun. Administrator tetap
+mengurus sisi infrastruktur dan boleh melihat serta mengunduh isinya, tetapi tidak bisa mengubahnya.
+
+### Mendeklarasikan
+
+```csharp
+public static void AddInvoiceModule(this EmAppBuilder builder)
+{
+   builder.AddManagedBucket("invoices", "Invoice",
+      "PDF copies of issued invoices, written by the Invoice module when an invoice is posted. " +
+      "Moving it to another volume does not move existing files; a smaller quota stops new invoices.",
+      o => {
+         o.KeepVersions = 10;
+         o.MaxObjectBytes = 50L * 1024 * 1024;
+      });
+}
+```
+
+| Parameter | Aturan |
+| --- | --- |
+| `name` | Nama bucket (aturan S3, lihat [Konsep](#konsep)). Mendeklarasikan nama yang sama dua kali melempar `InvalidOperationException`. |
+| `owner` | Aplikasi atau modul yang tampil sebagai "Managed by &lt;owner&gt;", 1–100 karakter. |
+| `description` | Wajib, 10–500 karakter, ditulis untuk administrator (bahasa Inggris, karena tampil di UI): isi bucket, modul pengisinya, dan dampak bila volume atau kuotanya diubah. Tampil di manager dan tidak bisa diedit di sana. |
+| `configure` | Nilai awal policy bucket (`ManagedBucketOptions`): `Access` (bawaan `Private`), `MaxObjectBytes`, `KeepVersions`, `KeepDays`, `QuotaBytes`, `QuotaObjects`, `Note`. Mengikuti aturan policy di manager; nilai tidak valid melempar `ArgumentException` saat host dibangun. |
+
+Deklarasi boleh sebelum atau sesudah `AddObjectStorage()` di `Program.cs`. Bila host tidak memanggil
+`AddObjectStorage()`, deklarasi diabaikan tanpa error; modul yang ingin tetap berjalan tanpa object storage
+menangani `IObjectStore` yang tidak tersedia seperti sebelumnya.
+
+### Yang terjadi saat startup
+
+Setelah pemeriksaan skema, untuk setiap deklarasi, masing-masing dalam satu transaksi serializable:
+
+1. **Bucket belum ada**: engine memastikan volume default ada, membuat policy `<bucket> (managed)` dari nilai
+   deklarasi di volume itu (satu replika), lalu bucket-nya.
+2. **Bucket biasa bernama sama sudah ada**: bucket itu **diadopsi**, isinya tetap. Bila policy-nya juga dipakai
+   bucket lain, policy disalin (semua nilai dan daftar volume berurutan) menjadi `<bucket> (managed)` dan
+   bucket dipindah ke salinan itu, sehingga penguncian tidak ikut mengunci bucket lain.
+3. **Sudah managed**: owner dan deskripsi disamakan dengan deklarasi (owner yang berubah dicatat di log level
+   information).
+4. **Selalu**: bila akses policy berbeda dari `Access` deklarasi, akses dikembalikan, dengan warning di log dan
+   entri audit.
+
+Nilai policy lainnya **hanya dipakai saat policy dibuat**. Perubahan administrator sesudahnya (volume, replika,
+retensi, kuota, ukuran maksimum object) tidak pernah ditimpa. Kegagalan menghentikan startup dengan pesan yang
+menyebut nama bucket.
+
+**Volume default** dibuat sekali saja, hanya ketika ada managed bucket yang perlu policy baru: nama
+`managed-default` (dengan `-2`, `-3`, … bila sudah dipakai), folder `ObjectStorageOptions.DefaultVolumePath`.
+ID-nya disimpan di `ta_Meta` (`ObjectStore.DefaultVolume`); bila administrator menghapusnya, volume baru dibuat
+saat dibutuhkan lagi. Atur folder di host:
+
+```csharp
+builder.AddObjectStorage(o => o.DefaultVolumePath = @"D:\EmData\objectstore");
+```
+
+Tanpa itu folder-nya `data/objectstore`, relatif terhadap content root API. Bila folder tidak bisa dipakai
+(tidak bisa ditulis, root drive, …) startup gagal dengan pesan yang menyebut `DefaultVolumePath`.
+
+### Yang dikunci
+
+| Siapa / apa | Boleh | Ditolak (409) |
+| --- | --- | --- |
+| Modul (`IObjectStore`) | Semua: put, delete, restore, purge | — |
+| Pekerjaan background | Retensi, garbage collection, replikasi, repair | — |
+| Administrator: bucket | State, note | Memindah ke policy lain, menghapus |
+| Administrator: policy-nya | Nama, state, note, volume, replika, retensi, kuota, ukuran maksimum object | Mengubah akses, menghapus, memakainya untuk bucket lain |
+| Administrator: isi | Browse, info object, daftar version, download | Upload, delete, restore, hapus permanen version |
+
+Penolakan upload terjadi sebelum body request dibaca. Endpoint publik `/store` mengikuti akses policy seperti
+bucket lain.
+
+### Bila deklarasi hilang
+
+Managed bucket yang tidak lagi dideklarasikan modulnya (modul dicabut, host mematikannya) **tetap terkunci** dan
+tampil sebagai **NOT DECLARED** di manager. Administrator lalu bisa **Release**
+(`PostMeta_StoreBucketRelease`, claim `Object Storage Settings Manage`): bucket menjadi bucket biasa, policy-nya
+menjadi policy biasa, isi dan deskripsinya tetap, dan sesudah itu bisa diubah atau dihapus. Release menolak
+bucket yang masih dideklarasikan atau bukan managed (409).
+
+### Audit
+
+Grup `System.ObjectStorage`: `bucket.provisioned` (dibuat saat startup), `bucket.adopted`,
+`bucket.access.enforced`, dan `bucket.released`. Entri yang ditulis saat startup berjenis actor `system`.
+
+### Catatan upgrade
+
+- **Tanpa perubahan skema.** Owner dan deskripsi disimpan di `ta_StoreBucket.json_object` (`owner`,
+  `description`), sesuai Dahlia Convention untuk kolom tambahan pada tabel yang sudah dipakai. Menjalankan ulang
+  [`views/vi_StoreBucket.sql`](../sqlscript/mssql/views/vi_StoreBucket.sql) menambah `cvStoreBucketOwner` dan
+  `cvStoreBucketDescription` ke view; engine sendiri tidak membaca view itu. `ObjectStoreSchemaVersion` tetap
+  `1`.
+- **Tambahan kontrak di `Em.Libs`**: `StoreBucketInfo` mendapat `Owner`, `Description`, `IsDeclared` (plus
+  `IsManaged` dan `IsUndeclared` terhitung), `StorePolicyInfo` mendapat `ManagedBucket` (plus `IsManaged`), dan
+  `IObjectStorageServices` mendapat `PostMeta_StoreBucketRelease`. Parameter record baru bersifat opsional,
+  jadi pemanggilan constructor lama tetap terkompilasi; implementasi lain dari `IObjectStorageServices` harus
+  menambah action baru itu.
+- **Builder**: `AddObjectStorage()` tidak berubah; overload `AddObjectStorage(Action<ObjectStorageOptions>)` dan
+  `AddManagedBucket(...)` baru.
+- Modul yang dulu meminta bucket buatan administrator lalu memeriksanya saat runtime dapat mendeklarasikannya;
+  bucket bernama sama yang sudah ada diadopsi beserta isinya.
+
 ## Endpoint baca publik
 
 `GET` dan `HEAD /store/<bucket>/<key>` melayani version current sebuah object di bucket yang policy-nya
@@ -159,12 +268,13 @@ Key diambil dari path request mentah dan di-percent-decode satu kali, jadi `a%20
 | Status | `GetMeta_StoreStatus` (penghitung, volume bermasalah, copy yang hilang, blob yang kurang replika dan blob orphan, task pemeliharaan, proses background terakhir) |
 | Volume | `GetMeta_StoreVolumes`, `PostGetMeta_StoreVolumeValidate`, `PostGetMeta_StoreVolumeSave`, `PostMeta_StoreVolumeDelete` (hanya bila tanpa copy dan tidak dipakai policy mana pun) |
 | Policy | `GetMeta_StorePolicies`, `PostGetMeta_StorePolicySave`, `PostMeta_StorePolicyDelete` (hanya bila tidak dipakai bucket mana pun) |
-| Bucket | `GetMeta_StoreBuckets`, `PostGetMeta_StoreBucketSave`, `PostMeta_StoreBucketDelete` (hanya bila tidak berisi object, termasuk yang sudah terhapus) |
+| Bucket | `GetMeta_StoreBuckets`, `PostGetMeta_StoreBucketSave`, `PostMeta_StoreBucketDelete` (hanya bila tidak berisi object, termasuk yang sudah terhapus, dan bukan managed), `PostMeta_StoreBucketRelease` (managed bucket yang tidak lagi dideklarasikan) |
 | Object | `GetMeta_StoreObjects(bucketId, prefix, delimiter, continuation, limit)`, `GetMeta_StoreObject`, `PostGetMeta_StoreObjectUpload(request, content)` (di-stream), `GetMeta_StoreObjectDownload(bucketId, key, version)` (di-stream), `PostMeta_StoreObjectDelete` |
 | Version | `GetMeta_StoreObjectVersions`, `PostGetMeta_StoreObjectRestore`, `PostMeta_StoreObjectVersionPurge` |
 | Pemeliharaan | `GetMeta_StoreGcReview(graceHours)`, `PostGetMeta_StoreGcRun(graceHours)`, `PostGetMeta_StoreRetentionRun`, `PostGetMeta_StoreRepairRun`, `GetMeta_StoreTasks` |
 
-Semua action GET hanya menerima parameter sederhana. Proses pemeliharaan memulai business task global (key
+Untuk managed bucket berlaku penguncian di [Yang dikunci](#yang-dikunci). Semua action GET hanya menerima
+parameter sederhana. Proses pemeliharaan memulai business task global (key
 `objectstorage:gc`, `objectstorage:retention`, `objectstorage:repair`) yang terlihat di manager dan di
 Business Task Manager.
 
@@ -213,10 +323,18 @@ core seperti manager lainnya. MAUI tidak punya layar ini.
   delete, side sheet **Versions** (restore, download sebuah version, hapus permanen sebuah version), dan
   **Load more** untuk listing panjang. **New bucket**/**Edit** membuka side sheet (nama, policy, state, note).
   **Open in tab** membuka bucket terpilih (di folder yang sedang dibuka bila sedang browse) di bucket editor.
+  Managed bucket menampilkan chip **MANAGED** (hover: owner dan deskripsi) dan, bila tidak lagi dideklarasikan,
+  **NOT DECLARED**; side sheet-nya menampilkan owner dan deskripsi read-only di atas note, daftar policy
+  terkunci, **Delete** nonaktif, dan **More › Release managed bucket** melepas bucket yang tidak dideklarasikan
+  setelah konfirmasi. Object browser dan side sheet version-nya tetap punya **Download** dan **Versions**, sedangkan
+  upload (termasuk drag-drop), delete, restore, dan hapus permanen nonaktif, dengan baris keterangan bahwa isinya
+  read-only. Policy milik managed bucket tidak ditawarkan untuk bucket baru atau bucket lain.
 - **Volumes**: tabel volume dengan copy, ukuran, copy yang hilang, dan pemeriksaan folder langsung; editor
   dengan tombol **Check**.
 - **Policies**: tabel policy; editor dengan replika, retensi, kuota (MB), akses, dan daftar volume berurutan
-  (centang untuk menyertakan, panah untuk mengubah urutan).
+  (centang untuk menyertakan, panah untuk mengubah urutan). Policy milik managed bucket menampilkan chip
+  **MANAGED**; di editornya **Access** nonaktif (help saat hover menjelaskan alasannya) dan field lain tetap bisa
+  diubah.
 - **Maintenance**: penghitung status, garbage collection (grace period, **Review**, lalu **Run**), menjalankan
   retensi dan repair, serta daftar task yang sedang berjalan.
 - Card di layar home: ukuran logis dibanding ukuran fisik dan jumlah volume bermasalah, dengan tombol refresh
@@ -243,11 +361,14 @@ await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName, Store
 Judul tab adalah `Bucket: <nama>` (`New Bucket` sampai bucket baru disimpan), jadi membuka bucket yang sudah
 terbuka akan pindah ke tab-nya. Menyimpan setting dan menghapus version secara permanen tetap butuh
 `Object Storage Settings Manage` di server. Nama bucket yang tidak ada membuat halaman kosong dengan pesan.
-Editor memakai view model yang sama dengan manager (`ObjectStorageManagerVm` dalam mode bucket page).
+Editor memakai view model yang sama dengan manager (`ObjectStorageManagerVm` dalam mode bucket page). Untuk
+managed bucket, editor menampilkan chip MANAGED, owner, dan deskripsi di atas pengaturan, mengunci policy, dan
+membuat object read-only seperti di manager.
 
 ## Batasan versi 1
 
-Belum termasuk: protokol S3 dan presigned URL, provider volume remote, hak per bucket untuk user atau role,
+Belum termasuk: protokol S3 dan presigned URL, provider volume remote, hak per bucket untuk user atau role
+(managed bucket mengunci isi untuk semua administrator secara sama),
 pengosongan (drain) volume dan rebalancing otomatis, banyak instance API, enkripsi at rest, object lock,
 lifecycle rule selain retensi version, pemindahan storage CDN/registry/NuGet/approval ke object storage, dan
 layar MAUI. Engine memakai locking hint khusus SQL Server; provider database lain tidak didukung untuk object
@@ -265,8 +386,13 @@ ditambahkan bersama adapter; SHA-256 tidak pernah menjadi ETag), dan tabel multi
 ## Catatan maintainer
 
 - Unit test: `tests/Em.Api.Core.Tests/ObjectStorage/` (nama, key, CRC32, hash lock, volume lokal, validasi
-  policy, aturan retensi). Test integrasi terhadap SQL Server:
-  `tests/Em.Api.Core.IntegrationTests/ObjectStoreTests.cs` (membuat skema dari skrip SQL asli dan dilewati bila
-  server tidak bisa dijangkau). Test view model: `tests/Em.Ui.Wpf.Core.Tests/ObjectStorageManagerTests.cs`.
+  policy, aturan retensi, deklarasi managed bucket dan JSON-nya). Test integrasi terhadap SQL Server:
+  `tests/Em.Api.Core.IntegrationTests/ObjectStoreTests.cs` dan `ManagedBucketTests.cs` (provisioning, adopsi,
+  penegakan akses, penguncian 409, release; membuat skema dari skrip SQL asli dan dilewati bila server tidak
+  bisa dijangkau). Test view model: `tests/Em.Ui.Wpf.Core.Tests/ObjectStorageManagerTests.cs`.
+- Module uji `Em.Test` mendeklarasikan managed bucket `emtest-files` (owner `Em Test`) sebagai contoh.
+- Smoke langsung terhadap Em.Api lokal (harness menjalankan API sendiri di database lokal dan membersihkan
+  barisnya): `dotnet run --project ..\.artefacts\em-system\scripts\managed-bucket-smoke`. Pemeriksaan render
+  layar terang dan gelap: `dotnet run --project ..\.artefacts\em-system\scripts\managed-bucket-render`.
 - Listing memakai collation biner `cStoreObjectKey` dan kolom computed berindeks `cStoreObjectKeyPrefix`
   (400 karakter pertama). Performa listing pada bucket besar belum diukur.

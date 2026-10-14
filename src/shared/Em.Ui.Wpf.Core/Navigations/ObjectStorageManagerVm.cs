@@ -128,6 +128,7 @@ public sealed partial class ObjectStorageManagerVm : MvvmModelBase
       Replace(Policies, await Service.GetMeta_StorePolicies(), p => p.Id, ref _selectedPolicyId);
       SelectedVolume = Volumes.FirstOrDefault(v => v.Id == _selectedVolumeId);
       SelectedPolicy = Policies.FirstOrDefault(p => p.Id == _selectedPolicyId);
+      FillBucketPolicyChoices(IsBucketEditorOpen || IsBucketPage ? BucketDraftPolicy?.Id : null);
    }
 
    private static void Replace<T>(ObservableCollection<T> target, IEnumerable<T> rows, Func<T, string> id, ref string? selectedId) {

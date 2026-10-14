@@ -52,12 +52,13 @@ public sealed partial class ObjectStorageManagerVm
          // New bucket: the same defaults as the side sheet of the manager; the typed draft survives a reload.
          IsBrowsing = false;
          OpenBucket = null;
-         if (BucketDraftPolicy is null || Policies.All(p => p.Id != BucketDraftPolicy.Id))
-            BucketDraftPolicy = Policies.FirstOrDefault(p => p.State == StorePolicyState.Active);
+         SetBucketDraftOwner(null);
+         if (BucketDraftPolicy is null || BucketPolicyChoices.All(p => p.Id != BucketDraftPolicy.Id))
+            BucketDraftPolicy = BucketPolicyChoices.FirstOrDefault(p => p.State == StorePolicyState.Active);
          if (!IsLoaded) BucketDraftState = StoreBucketState.Active;
          NotifyChanged(nameof(IsBucketPageNew));
          IsLoaded = true;
-         Status = Policies.Count == 0 ? "Create a policy in Object Storage Manager before creating a bucket." : "Fill in the bucket and save it to start adding objects.";
+         Status = BucketPolicyChoices.Count == 0 ? "Create a policy in Object Storage Manager before creating a bucket." : "Fill in the bucket and save it to start adding objects.";
          return;
       }
       var bucket = _bucketEditId is { } id ? Buckets.FirstOrDefault(b => b.Id == id) : Buckets.FirstOrDefault(b => b.Name == BucketDraftName);
@@ -71,7 +72,8 @@ public sealed partial class ObjectStorageManagerVm
       IsNewBucket = false;
       NotifyChanged(nameof(IsBucketPageNew));
       BucketDraftName = bucket.Name;
-      BucketDraftPolicy = Policies.FirstOrDefault(p => p.Id == bucket.PolicyId);
+      SetBucketDraftOwner(bucket);
+      BucketDraftPolicy = BucketPolicyChoices.FirstOrDefault(p => p.Id == bucket.PolicyId);
       BucketDraftState = bucket.State;
       BucketDraftNote = bucket.Note;
       SelectedBucket = bucket;

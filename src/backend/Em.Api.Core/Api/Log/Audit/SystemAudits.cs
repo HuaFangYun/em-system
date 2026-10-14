@@ -81,6 +81,10 @@ internal static class SystemAuditCatalog
          .Entry("version.purged", "Purged package version"));
       yield return Group(ObjectStorage, "Object storage", [Admin + IObjectStorageServices.ManagerClaim, LogClaims + ILogServices.AuditReadClaim], g => g
          .Entry("bucket.deleted", "Deleted bucket")
+         .Entry("bucket.provisioned", "Created managed bucket")
+         .Entry("bucket.adopted", "Adopted bucket as managed")
+         .Entry("bucket.access.enforced", "Enforced managed bucket access")
+         .Entry("bucket.released", "Released managed bucket")
          .Entry("object.deleted", "Deleted object")
          .Entry("version.purged", "Purged object version")
          .Entry("policy.deleted", "Deleted policy")

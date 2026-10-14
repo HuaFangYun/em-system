@@ -206,7 +206,10 @@ public class ta_StoreBucket
    /// <summary>Creation time.</summary>
    public DateTime datestamp { get; set; }
 
-   /// <summary>Additional data as JSON.</summary>
+   /// <summary>
+   /// Additional data as JSON. A managed bucket keeps <c>owner</c> (the application that manages it) and
+   /// <c>description</c> (what the bucket is for) here; without <c>owner</c> the bucket is an ordinary bucket.
+   /// </summary>
    public string? json_object { get; set; }
 }
 

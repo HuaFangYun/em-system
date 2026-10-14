@@ -34,6 +34,15 @@ namespace Em.Test.Api
          AddDocumentApproval(builder);
 
          builder.AddHubTaskSource<TestHubTaskSource>();
+
+         // Managed bucket example: created at startup when object storage is on, ignored when it is off.
+         builder.AddManagedBucket(ITestServices.FilesBucket, "Em Test",
+            "Sample files written by the Em Test module through IObjectStore to exercise managed buckets. Safe to empty " +
+            "in a test installation; nothing outside the test module reads it. A small quota is enough.",
+            o => {
+               o.KeepVersions = 5;
+               o.MaxObjectBytes = 20L * 1024 * 1024;
+            });
       }
 
       // Data approval: a change to an item waits in the request and only reaches the table once approved.

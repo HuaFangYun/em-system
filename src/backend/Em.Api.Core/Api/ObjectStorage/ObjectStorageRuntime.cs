@@ -21,6 +21,12 @@ public sealed class ObjectStorageRuntime
       _providers = providers.ToDictionary(p => p.Type);
    }
 
+   /// <summary>Managed buckets declared by the modules of this host.</summary>
+   internal ManagedBucketRegistry ManagedBuckets { get; init; } = new();
+
+   /// <summary>Host options.</summary>
+   internal ObjectStorageOptions Options { get; init; } = new();
+
    /// <summary>Lock per blob hash.</summary>
    public StoreHashLock HashLock { get; } = new();
 

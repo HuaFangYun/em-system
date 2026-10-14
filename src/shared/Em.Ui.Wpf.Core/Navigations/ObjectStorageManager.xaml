@@ -24,6 +24,25 @@
          <DataTemplate x:Key="policyNameTemplate">
             <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
          </DataTemplate>
+         <!-- MANAGED and NOT DECLARED chips of a StoreBucketInfo; nothing for an ordinary bucket. -->
+         <DataTemplate x:Key="managedChipsTemplate">
+            <StackPanel Orientation="Horizontal">
+               <Border Style="{StaticResource chipAccentStyle}" Margin="8,0,0,0" Padding="8,1" ToolTipService.ShowDuration="60000" Visibility="{Binding IsManaged, Converter={StaticResource boolVisibility}}">
+                  <Border.ToolTip>
+                     <StackPanel MaxWidth="360">
+                        <TextBlock Text="{Binding Owner, StringFormat=Managed by {0}}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        <TextBlock Text="Contents are read-only here; the policy keeps its access and the bucket cannot be deleted." TextWrapping="Wrap" Margin="0,6,0,0" Opacity="0.75"/>
+                     </StackPanel>
+                  </Border.ToolTip>
+                  <TextBlock Text="MANAGED"/>
+               </Border>
+               <Border Style="{StaticResource chipWarningStyle}" Margin="6,0,0,0" Padding="8,1" ToolTipService.ShowDuration="60000" Visibility="{Binding IsUndeclared, Converter={StaticResource boolVisibility}}"
+                       ToolTip="The application no longer declares this bucket. It stays locked until it is released with More &gt; Release managed bucket.">
+                  <TextBlock Text="NOT DECLARED"/>
+               </Border>
+            </StackPanel>
+         </DataTemplate>
       </ResourceDictionary>
    </UserControl.Resources>
    <Grid ClipToBounds="True" PreviewKeyDown="OnPreviewKeyDown">
@@ -69,11 +88,19 @@
                         <TextBlock Text="Edit" VerticalAlignment="Center"/>
                      </StackPanel>
                   </Button>
-                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[DeleteBucketCommand]}" Margin="8,0,0,0">
+                  <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[DeleteBucketCommand]}" Margin="8,0,0,0" ToolTipService.ShowOnDisabled="True" ToolTip="Delete an empty bucket. A managed bucket cannot be deleted.">
                      <StackPanel Orientation="Horizontal">
                         <fa:FontAwesome Icon="Solid_TrashCan" Style="{StaticResource buttonIconStyle}"/>
                         <TextBlock Text="Delete" VerticalAlignment="Center"/>
                      </StackPanel>
+                  </Button>
+                  <Button Style="{StaticResource outlinedButtonStyle}" Margin="8,0,0,0" Click="OnMoreClick" IsEnabled="{Binding CanBrowse}" ToolTip="More bucket actions" AutomationProperties.Name="More bucket actions">
+                     <fa:FontAwesome Icon="Solid_EllipsisVertical" Style="{StaticResource buttonIconStyle}" Margin="0"/>
+                     <Button.ContextMenu>
+                        <ContextMenu Style="{StaticResource cascadeContextMenuStyle}">
+                           <MenuItem Header="Release managed bucket" Command="{Binding Commands[ReleaseBucketCommand]}" ToolTipService.ShowOnDisabled="True" ToolTip="Turns a managed bucket that its application no longer declares into an ordinary bucket. Contents and policy are kept."/>
+                        </ContextMenu>
+                     </Button.ContextMenu>
                   </Button>
                </StackPanel>
             </ScrollViewer>
@@ -145,14 +172,14 @@
                   </Grid>
                   <!-- Bucket table -->
                   <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled" Visibility="{Binding IsNotBrowsing, Converter={StaticResource boolVisibility}}">
-                     <Grid MinWidth="790">
+                     <Grid MinWidth="920">
                         <Grid.RowDefinitions>
                            <RowDefinition Height="Auto"/>
                            <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <Grid Margin="24,0,20,10">
                            <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="200"/>
+                              <ColumnDefinition Width="330"/>
                               <ColumnDefinition Width="150"/>
                               <ColumnDefinition Width="90"/>
                               <ColumnDefinition Width="110"/>
@@ -171,14 +198,19 @@
                               <DataTemplate>
                                  <Grid>
                                     <Grid.ColumnDefinitions>
-                                       <ColumnDefinition Width="200"/>
+                                       <ColumnDefinition Width="330"/>
                                        <ColumnDefinition Width="150"/>
                                        <ColumnDefinition Width="90"/>
                                        <ColumnDefinition Width="110"/>
                                        <ColumnDefinition Width="110"/>
                                        <ColumnDefinition Width="110"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{Binding Name}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Note}"/>
+                                    <DockPanel Grid.Column="0" Margin="0,0,12,0" LastChildFill="True">
+                                       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                          <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource managedChipsTemplate}"/>
+                                       </StackPanel>
+                                       <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Note}"/>
+                                    </DockPanel>
                                     <TextBlock Grid.Column="1" Text="{Binding PolicyName}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding PolicyName}"/>
                                     <TextBlock Grid.Column="2" Text="{Binding Objects, StringFormat={}{0:N0}}" Margin="0,0,12,0" VerticalAlignment="Center"/>
                                     <TextBlock Grid.Column="3" Text="{Binding Bytes, Converter={x:Static local:ObjectStorageManager.SizeConverter}}" Margin="0,0,12,0" VerticalAlignment="Center"/>
@@ -240,7 +272,8 @@
                      <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[LoadMoreCommand]}" Visibility="{Binding HasMore, Converter={StaticResource boolVisibility}}">
                         <TextBlock Text="Load more"/>
                      </Button>
-                     <TextBlock Text="Drop files here to upload them to this folder. Uploading an existing name adds a new version." Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/>
+                     <TextBlock Text="Drop files here to upload them to this folder. Uploading an existing name adds a new version." Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" Visibility="{Binding CanChangeContents, Converter={StaticResource boolVisibility}}"/>
+                     <TextBlock Text="{Binding ManagedNotice}" Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" Visibility="{Binding IsOpenBucketManaged, Converter={StaticResource boolVisibility}}"/>
                   </StackPanel>
                </Grid>
             </Border>
@@ -383,14 +416,14 @@
                      </Button>
                   </Grid>
                   <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                     <Grid MinWidth="860">
+                     <Grid MinWidth="960">
                         <Grid.RowDefinitions>
                            <RowDefinition Height="Auto"/>
                            <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <Grid Margin="24,0,20,10">
                            <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="170"/>
+                              <ColumnDefinition Width="270"/>
                               <ColumnDefinition Width="90"/>
                               <ColumnDefinition Width="170"/>
                               <ColumnDefinition Width="110"/>
@@ -411,7 +444,7 @@
                               <DataTemplate>
                                  <Grid>
                                     <Grid.ColumnDefinitions>
-                                       <ColumnDefinition Width="170"/>
+                                       <ColumnDefinition Width="270"/>
                                        <ColumnDefinition Width="90"/>
                                        <ColumnDefinition Width="170"/>
                                        <ColumnDefinition Width="110"/>
@@ -419,7 +452,15 @@
                                        <ColumnDefinition Width="80"/>
                                        <ColumnDefinition Width="80"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{Binding Name}" Margin="0,0,12,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Note}"/>
+                                    <DockPanel Grid.Column="0" Margin="0,0,12,0" LastChildFill="True">
+                                       <Border DockPanel.Dock="Right" Style="{StaticResource chipAccentStyle}" Margin="8,0,0,0" Padding="8,1" Visibility="{Binding IsManaged, Converter={StaticResource boolVisibility}}">
+                                          <Border.ToolTip>
+                                             <TextBlock TextWrapping="Wrap" MaxWidth="340"><TextBlock.Text><Binding Path="ManagedBucket" StringFormat="Belongs to managed bucket '{0}'. Its access is set by the application; every other field can be changed."/></TextBlock.Text></TextBlock>
+                                          </Border.ToolTip>
+                                          <TextBlock Text="MANAGED"/>
+                                       </Border>
+                                       <TextBlock Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Note}"/>
+                                    </DockPanel>
                                     <TextBlock Grid.Column="1" Margin="0,0,12,0" VerticalAlignment="Center">
                                        <TextBlock.Text>
                                           <MultiBinding StringFormat="{}{0} / {1}">
@@ -557,10 +598,25 @@
                      <TextBlock Text="Name" Style="{StaticResource fieldLabelStyle}" Margin="0,10,0,4"/>
                      <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding BucketDraftName, UpdateSourceTrigger=PropertyChanged}" MaxLength="63" IsEnabled="{Binding IsNewBucket}" Tag="my-bucket"/>
                      <TextBlock Text="3–63 lowercase letters, digits, '-' and '.'. The name cannot change later." Style="{StaticResource fieldHelpStyle}" Margin="0,6,0,0" TextWrapping="Wrap"/>
-                     <TextBlock Text="Policy" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
-                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Policies}" SelectedItem="{Binding BucketDraftPolicy, Mode=TwoWay}" ItemTemplate="{StaticResource policyNameTemplate}" AutomationProperties.Name="Policy"/>
+                     <StackPanel Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000">
+                        <StackPanel.ToolTip>
+                           <TextBlock Text="{Binding BucketPolicyHelp}" TextWrapping="Wrap" MaxWidth="340"/>
+                        </StackPanel.ToolTip>
+                        <TextBlock Text="Policy" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
+                        <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding BucketPolicyChoices}" SelectedItem="{Binding BucketDraftPolicy, Mode=TwoWay}" ItemTemplate="{StaticResource policyNameTemplate}" IsEnabled="{Binding CanChooseBucketPolicy}" AutomationProperties.Name="Policy"/>
+                     </StackPanel>
                      <TextBlock Text="State" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
                      <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding BucketStates}" SelectedValuePath="Value" SelectedValue="{Binding BucketDraftState}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Bucket state"/>
+                     <Border Margin="0,14,0,0" Padding="12,10" CornerRadius="8" BorderThickness="1" BorderBrush="{StaticResource outlineBrush}" Background="{StaticResource surfaceStrongBrush}" Visibility="{Binding IsBucketDraftManaged, Converter={StaticResource boolVisibility}}">
+                        <StackPanel>
+                           <StackPanel Orientation="Horizontal">
+                              <Border Style="{StaticResource chipAccentStyle}" Padding="8,1"><TextBlock Text="MANAGED"/></Border>
+                              <Border Style="{StaticResource chipWarningStyle}" Padding="8,1" Margin="6,0,0,0" Visibility="{Binding IsBucketDraftUndeclared, Converter={StaticResource boolVisibility}}"><TextBlock Text="NOT DECLARED"/></Border>
+                              <TextBlock Text="{Binding BucketDraftManagedCaption}" Style="{StaticResource fieldLabelStyle}" VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
+                           </StackPanel>
+                           <TextBlock Text="{Binding BucketDraftDescription}" Style="{StaticResource fieldHelpStyle}" Margin="0,8,0,0" TextWrapping="Wrap" ToolTip="Written by the application; it cannot be edited here."/>
+                        </StackPanel>
+                     </Border>
                      <TextBlock Text="Note" Style="{StaticResource fieldLabelStyle}" Margin="0,14,0,4"/>
                      <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding BucketDraftNote, UpdateSourceTrigger=PropertyChanged}" MaxLength="500"/>
                      <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
@@ -630,6 +686,10 @@
                   </Border.Resources>
                   <StackPanel IsEnabled="{Binding CanEdit}">
                      <TextBlock Text="POLICY" Style="{StaticResource sectionCaptionStyle}"/>
+                     <StackPanel Orientation="Horizontal" Margin="0,8,0,0" Visibility="{Binding IsPolicyManaged, Converter={StaticResource boolVisibility}}">
+                        <Border Style="{StaticResource chipAccentStyle}" Padding="8,1"><TextBlock Text="MANAGED"/></Border>
+                        <TextBlock Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="10,0,0,0" TextWrapping="Wrap"><TextBlock.Text><Binding Path="PolicyManagedBucket" StringFormat="Belongs to managed bucket '{0}'; access is fixed by its application."/></TextBlock.Text></TextBlock>
+                     </StackPanel>
                      <StackPanel Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="Unique display name of the policy, up to 100 characters. It is what the Policy list of the bucket editor shows.">
                         <TextBlock Text="Name" Style="{StaticResource fieldLabelStyle}" Margin="0,10,0,4"/>
                         <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding PolicyName, UpdateSourceTrigger=PropertyChanged}" MaxLength="100"/>
@@ -643,9 +703,9 @@
                            <TextBlock Text="State" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
                            <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding PolicyStates}" SelectedValuePath="Value" SelectedValue="{Binding PolicyState}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Policy state"/>
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="Private: objects are only reachable through Object Storage Manager and server-side code. PublicRead: anyone can read objects without signing in at GET /store/&lt;bucket&gt;/&lt;key&gt;; uploads still need the manager.">
+                        <StackPanel Grid.Column="1" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="{Binding PolicyAccessHelp}">
                            <TextBlock Text="Access" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
-                           <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding AccessOptions}" SelectedValuePath="Value" SelectedValue="{Binding PolicyAccess}" ItemTemplate="{StaticResource optionTemplate}" AutomationProperties.Name="Access"/>
+                           <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding AccessOptions}" SelectedValuePath="Value" SelectedValue="{Binding PolicyAccess}" ItemTemplate="{StaticResource optionTemplate}" IsEnabled="{Binding CanChangePolicyAccess}" AutomationProperties.Name="Access"/>
                         </StackPanel>
                      </Grid>
                      <Grid Margin="0,14,0,0">
@@ -742,6 +802,7 @@
                   <StackPanel IsEnabled="{Binding CanEdit}">
                      <TextBlock Text="VERSIONS" Style="{StaticResource sectionCaptionStyle}"/>
                      <TextBlock Text="{Binding VersionsKey}" Style="{StaticResource metaValueStyle}" Margin="0,6,0,10" TextWrapping="Wrap"/>
+                     <TextBlock Text="{Binding ManagedNotice}" Style="{StaticResource fieldHelpStyle}" Margin="0,0,0,10" TextWrapping="Wrap" Visibility="{Binding IsOpenBucketManaged, Converter={StaticResource boolVisibility}}"/>
                      <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                         <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[RestoreVersionCommand]}">
                            <StackPanel Orientation="Horizontal">

@@ -1,3 +1,4 @@
+using Em.Api.Core.Log.Audit;
 using Em.Api.Core.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,9 +9,9 @@ namespace Em.Api.Core.ObjectStorage;
 
 /// <summary>
 /// Startup checks and background maintenance of object storage. At startup: verifies the schema, takes the
-/// instance lease in <c>ta_Meta</c> (a warning, not a guarantee, when another instance looks alive) and
-/// cleans the staging folders. Afterwards: replication when an upload signals it and at least hourly, and
-/// version retention every six hours. Garbage collection only runs on request (review, then run).
+/// instance lease in <c>ta_Meta</c> (a warning, not a guarantee, when another instance looks alive), applies
+/// the managed bucket declarations (<see cref="ManagedBucketProvisioner"/>) and cleans the staging folders.
+/// Afterwards: replication when an upload signals it and at least hourly, and version retention every six hours. Garbage collection only runs on request (review, then run).
 /// </summary>
 internal sealed class ObjectStorageBackground(IServiceProvider services, ObjectStorageRuntime runtime, ILogger<ObjectStorageBackground> logger)
    : IHostedService, IDisposable
@@ -45,6 +46,8 @@ internal sealed class ObjectStorageBackground(IServiceProvider services, ObjectS
                "views/vi_Store*.sql on the core database, or remove AddObjectStorage() from the host.", ex);
          }
          await RenewLeaseAsync(db, true, ct);
+         // Managed buckets exist before any module request needs them; a bucket that cannot be provisioned stops startup.
+         await new ManagedBucketProvisioner(db, runtime, logger, scope.ServiceProvider.GetService<IAuditWriter>()).ProvisionAsync(ct);
          var cleaned = await scope.ServiceProvider.GetRequiredService<ObjectStorageMaintenance>().CleanStagingAsync(ct);
          if (cleaned > 0) logger.LogInformation("Object storage removed {Count} interrupted uploads from staging.", cleaned);
       }

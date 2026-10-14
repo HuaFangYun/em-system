@@ -9,9 +9,17 @@ namespace Em.Api.Core.Models;
 /// deleting buckets, permanent deletion of versions and maintenance require <see cref="SettingsClaim"/>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Server-side modules use <c>IObjectStore</c> in <c>Em.Api.Core</c> directly; these actions are the
 /// management surface of the same logic. Objects of a <see cref="StoreAccess.PublicRead"/> bucket are also
 /// served without identity at <c>GET /store/&lt;bucket&gt;/&lt;key&gt;</c>.
+/// </para>
+/// <para>
+/// A managed bucket (<see cref="StoreBucketInfo.IsManaged"/>) is declared by an application module and owned by
+/// it. Its contents can only be browsed and downloaded here: upload, delete, restore and version purge answer 409.
+/// Its policy cannot change, its policy's access cannot change, and neither the bucket nor the policy can be
+/// deleted; volumes, replicas, retention, quotas, maximum object size, state and notes stay editable.
+/// </para>
 /// </remarks>
 public interface IObjectStorageServices : IServices
 {
@@ -42,7 +50,10 @@ public interface IObjectStorageServices : IServices
    /// <summary>Every policy with its ordered volumes.</summary>
    Task<StorePolicyInfo[]> GetMeta_StorePolicies();
 
-   /// <summary>Creates (<see cref="StorePolicySave.Id"/> is <c>null</c>) or updates a policy and its volume list.</summary>
+   /// <summary>
+   /// Creates (<see cref="StorePolicySave.Id"/> is <c>null</c>) or updates a policy and its volume list. The access
+   /// of a managed policy cannot change (409).
+   /// </summary>
    Task<StorePolicyInfo> PostGetMeta_StorePolicySave(StorePolicySave request);
 
    /// <summary>Deletes a policy that no bucket uses (409 otherwise).</summary>
@@ -53,12 +64,21 @@ public interface IObjectStorageServices : IServices
 
    /// <summary>
    /// Creates (<see cref="StoreBucketSave.Id"/> is <c>null</c>) or updates a bucket. The name of an existing
-   /// bucket cannot change.
+   /// bucket cannot change. A managed bucket keeps its policy, and no other bucket may take a managed policy (409).
    /// </summary>
    Task<StoreBucketInfo> PostGetMeta_StoreBucketSave(StoreBucketSave request);
 
-   /// <summary>Deletes a bucket that holds no objects, including deleted ones with history (409 otherwise).</summary>
+   /// <summary>
+   /// Deletes a bucket that holds no objects, including deleted ones with history (409 otherwise). A managed
+   /// bucket cannot be deleted (409).
+   /// </summary>
    Task PostMeta_StoreBucketDelete(string bucketId);
+
+   /// <summary>
+   /// Turns a managed bucket that the running API no longer declares into an ordinary bucket; its policy becomes
+   /// an ordinary policy and its contents stay. A bucket that is not managed, or still declared, answers 409.
+   /// </summary>
+   Task PostMeta_StoreBucketRelease(string bucketId);
 
    /// <summary>
    /// Lists objects whose current version is not a delete marker, ordered by key. With a
@@ -78,26 +98,26 @@ public interface IObjectStorageServices : IServices
 
    /// <summary>
    /// Uploads a new version of an object; the content is streamed. Answers 413 when the content exceeds the
-   /// policy's maximum object size, 409 when the bucket quota would be exceeded or the bucket is read-only,
-   /// and 400 for an invalid key.
+   /// policy's maximum object size, 409 when the bucket quota would be exceeded, the bucket is read-only or the
+   /// bucket is managed (checked before the content is read), and 400 for an invalid key.
    /// </summary>
    Task<StoreObjectInfo> PostGetMeta_StoreObjectUpload(StoreUploadRequest request, Stream content);
 
    /// <summary>Content of the current version, or of <paramref name="version"/> when given.</summary>
    Task<Stream> GetMeta_StoreObjectDownload(string bucketId, string key, int? version);
 
-   /// <summary>Deletes an object by adding a delete marker; its history stays and can be restored.</summary>
+   /// <summary>Deletes an object by adding a delete marker; its history stays and can be restored. 409 for a managed bucket.</summary>
    Task PostMeta_StoreObjectDelete(string bucketId, string key);
 
    /// <summary>Every version of an object, newest first.</summary>
    Task<StoreObjectVersionInfo[]> GetMeta_StoreObjectVersions(string bucketId, string key);
 
-   /// <summary>Makes an older version current again by adding a new version that points to the same content.</summary>
+   /// <summary>Makes an older version current again by adding a new version that points to the same content. 409 for a managed bucket.</summary>
    Task<StoreObjectInfo> PostGetMeta_StoreObjectRestore(string bucketId, string key, int version);
 
    /// <summary>
    /// Permanently deletes one version. When it was current, the newest remaining version that is not a
-   /// delete marker becomes current; when no version remains, the object disappears.
+   /// delete marker becomes current; when no version remains, the object disappears. 409 for a managed bucket.
    /// </summary>
    Task PostMeta_StoreObjectVersionPurge(string bucketId, string key, int version);
 
@@ -203,9 +223,16 @@ public sealed class StoreVolumeSave
 /// <param name="Access">Public access.</param>
 /// <param name="VolumeIds">Volumes in priority order.</param>
 /// <param name="Buckets">Buckets using the policy.</param>
+/// <param name="ManagedBucket">
+/// Name of the managed bucket this policy belongs to; <c>null</c> for an ordinary policy. The access of a
+/// managed policy is fixed by the application, and no other bucket can use it.
+/// </param>
 public sealed record StorePolicyInfo(string Id, string Name, StorePolicyState State, string? Note, int ReplicaMin, int ReplicaTarget,
    int? KeepVersions, int? KeepDays, long? QuotaBytes, long? QuotaObjects, long? MaxObjectBytes, StoreAccess Access,
-   string[] VolumeIds, int Buckets) {
+   string[] VolumeIds, int Buckets, string? ManagedBucket = null) {
+   /// <summary>The policy belongs to a managed bucket.</summary>
+   public bool IsManaged => ManagedBucket is not null;
+
    /// <inheritdoc/>
    public override string ToString() => Name;
 }
@@ -267,8 +294,24 @@ public sealed class StorePolicySave
 /// <param name="MaxObjectBytes">Maximum object size of the policy.</param>
 /// <param name="Access">Public access of the policy.</param>
 /// <param name="CreatedAt">Creation time.</param>
+/// <param name="Owner">
+/// Application (module) that manages the bucket; <c>null</c> for an ordinary bucket. The contents of a managed
+/// bucket can only be read and downloaded through the management actions.
+/// </param>
+/// <param name="Description">What the bucket is for, as declared by its application; read-only for administrators.</param>
+/// <param name="IsDeclared">
+/// A managed bucket that the running API still declares. A managed bucket that is no longer declared can be
+/// released with <see cref="IObjectStorageServices.PostMeta_StoreBucketRelease"/>.
+/// </param>
 public sealed record StoreBucketInfo(string Id, string Name, string PolicyId, string PolicyName, StoreBucketState State, string? Note,
-   long Bytes, long Objects, long? QuotaBytes, long? QuotaObjects, long? MaxObjectBytes, StoreAccess Access, DateTime CreatedAt) {
+   long Bytes, long Objects, long? QuotaBytes, long? QuotaObjects, long? MaxObjectBytes, StoreAccess Access, DateTime CreatedAt,
+   string? Owner = null, string? Description = null, bool IsDeclared = false) {
+   /// <summary>The bucket is managed by an application.</summary>
+   public bool IsManaged => Owner is not null;
+
+   /// <summary>A managed bucket that the running API no longer declares.</summary>
+   public bool IsUndeclared => IsManaged && !IsDeclared;
+
    /// <summary>Server-relative public path of the bucket, or <c>null</c> when it is private.</summary>
    public string? PublicPath => Access == StoreAccess.PublicRead ? $"/store/{Name}/" : null;
 

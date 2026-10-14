@@ -58,6 +58,18 @@
                      <fa:FontAwesome Icon="Solid_ArrowsRotate" FontSize="13"/>
                   </Button>
                </Grid>
+               <!-- Managed bucket: owner and the description its application declared, read-only. -->
+               <StackPanel Margin="0,10,0,0" Visibility="{Binding IsBucketDraftManaged, Converter={StaticResource boolVisibility}}">
+                  <StackPanel Orientation="Horizontal">
+                     <Border Style="{StaticResource chipAccentStyle}" Padding="8,1"><TextBlock Text="MANAGED"/></Border>
+                     <Border Style="{StaticResource chipWarningStyle}" Padding="8,1" Margin="6,0,0,0" Visibility="{Binding IsBucketDraftUndeclared, Converter={StaticResource boolVisibility}}"
+                             ToolTip="The application no longer declares this bucket. It stays locked until it is released in Object Storage Manager (More &gt; Release managed bucket).">
+                        <TextBlock Text="NOT DECLARED"/>
+                     </Border>
+                     <TextBlock Text="{Binding BucketDraftManagedCaption}" Style="{StaticResource fieldLabelStyle}" VerticalAlignment="Center" Margin="10,0,0,0" TextTrimming="CharacterEllipsis"/>
+                  </StackPanel>
+                  <TextBlock Text="{Binding BucketDraftDescription}" Style="{StaticResource fieldHelpStyle}" Margin="0,6,0,0" TextWrapping="Wrap" ToolTip="Written by the application; it cannot be edited here."/>
+               </StackPanel>
                <Grid Margin="0,10,0,0" IsEnabled="{Binding CanEdit}">
                   <Grid.ColumnDefinitions>
                      <ColumnDefinition Width="2*"/>
@@ -70,9 +82,9 @@
                      <TextBlock Text="Name" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
                      <TextBox Style="{StaticResource fieldBoxStyle}" Text="{Binding BucketDraftName, UpdateSourceTrigger=PropertyChanged}" MaxLength="63" IsEnabled="{Binding IsNewBucket}" Tag="my-bucket" AutomationProperties.Name="Bucket name"/>
                   </StackPanel>
-                  <StackPanel Grid.Column="1" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="The policy decides volumes, replicas, version retention, quotas and public access of the bucket. Only an active policy can be chosen for a new bucket or a change.">
+                  <StackPanel Grid.Column="1" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="{Binding BucketPolicyHelp}">
                      <TextBlock Text="Policy" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
-                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding Policies}" SelectedItem="{Binding BucketDraftPolicy, Mode=TwoWay}" ItemTemplate="{StaticResource policyNameTemplate}" AutomationProperties.Name="Policy"/>
+                     <ComboBox Style="{StaticResource fieldComboStyle}" ItemsSource="{Binding BucketPolicyChoices}" SelectedItem="{Binding BucketDraftPolicy, Mode=TwoWay}" ItemTemplate="{StaticResource policyNameTemplate}" IsEnabled="{Binding CanChooseBucketPolicy}" AutomationProperties.Name="Policy"/>
                   </StackPanel>
                   <StackPanel Grid.Column="2" Margin="0,0,8,0" Background="Transparent" ToolTipService.ShowOnDisabled="True" ToolTipService.ShowDuration="60000" ToolTip="Active: objects can be uploaded, deleted and restored. Read-only: objects can only be read and downloaded.">
                      <TextBlock Text="State" Style="{StaticResource fieldLabelStyle}" Margin="0,0,0,4"/>
@@ -214,7 +226,8 @@
                   <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[LoadMoreCommand]}" Visibility="{Binding HasMore, Converter={StaticResource boolVisibility}}">
                      <TextBlock Text="Load more"/>
                   </Button>
-                  <TextBlock Text="Drop files here to upload them to this folder. Uploading an existing name adds a new version." Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap"/>
+                  <TextBlock Text="Drop files here to upload them to this folder. Uploading an existing name adds a new version." Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" Visibility="{Binding CanChangeContents, Converter={StaticResource boolVisibility}}"/>
+                  <TextBlock Text="{Binding ManagedNotice}" Style="{StaticResource fieldHelpStyle}" VerticalAlignment="Center" Margin="12,0,0,0" TextWrapping="Wrap" Visibility="{Binding IsOpenBucketManaged, Converter={StaticResource boolVisibility}}"/>
                </StackPanel>
             </Grid>
          </Border>
@@ -231,6 +244,7 @@
                   <StackPanel IsEnabled="{Binding CanEdit}">
                      <TextBlock Text="VERSIONS" Style="{StaticResource sectionCaptionStyle}"/>
                      <TextBlock Text="{Binding VersionsKey}" Style="{StaticResource metaValueStyle}" Margin="0,6,0,10" TextWrapping="Wrap"/>
+                     <TextBlock Text="{Binding ManagedNotice}" Style="{StaticResource fieldHelpStyle}" Margin="0,0,0,10" TextWrapping="Wrap" Visibility="{Binding IsOpenBucketManaged, Converter={StaticResource boolVisibility}}"/>
                      <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                         <Button Style="{StaticResource outlinedButtonStyle}" Command="{Binding Commands[RestoreVersionCommand]}">
                            <StackPanel Orientation="Horizontal">

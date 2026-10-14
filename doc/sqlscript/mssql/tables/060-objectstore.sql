@@ -16,6 +16,11 @@
       cStoreObjectBlobState      1 Ready, 2 Orphan
       cStoreObjectBlobVolState   1 Writing, 2 Ready, 3 Missing, 4 Deleting
 
+    ta_StoreBucket.json_object of a managed bucket (a bucket declared by an application module with
+    AddManagedBucket) holds {"owner": "<application>", "description": "<what the bucket is for>"}.
+    Without "owner" the bucket is an ordinary bucket; a released bucket keeps only "description".
+    A policy is managed while a managed bucket uses it. vi_StoreBucket expands both keys.
+
     Blob identity is the SHA-256 of the content (binary(32)); blobs are shared across buckets.
     Object keys are case-sensitive (binary collation). Uniqueness of a key inside a bucket is
     enforced through cStoreObjectKeyHash (SHA-256 of the UTF-8 key) because an index on the full

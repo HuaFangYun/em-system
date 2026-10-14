@@ -49,7 +49,24 @@ public sealed partial class ObjectStorageManagerVm
    public bool IsNotBrowsing => !IsBrowsing;
 
    /// <summary>Bucket whose objects are browsed.</summary>
-   public StoreBucketInfo? OpenBucket { get => Get<StoreBucketInfo>(); private set => Set(value); }
+   public StoreBucketInfo? OpenBucket {
+      get => Get<StoreBucketInfo>();
+      private set => Set(value, _ => {
+         NotifyChanged(nameof(IsOpenBucketManaged));
+         NotifyChanged(nameof(CanChangeContents));
+         NotifyChanged(nameof(ManagedNotice));
+         UpdateState();
+      });
+   }
+
+   /// <summary>The browsed bucket is managed by an application, so its contents are read-only here.</summary>
+   public bool IsOpenBucketManaged => OpenBucket?.IsManaged == true;
+
+   /// <summary>Objects of the browsed bucket may be uploaded, deleted, restored and purged here.</summary>
+   public bool CanChangeContents => OpenBucket is { IsManaged: false };
+
+   /// <summary>Line shown in the object browser of a managed bucket; empty otherwise.</summary>
+   public string ManagedNotice => OpenBucket is { Owner: { } owner } ? $"Contents are managed by {owner}; read-only here. Download and Versions stay available." : "";
 
    /// <summary>Current key prefix of the browser, ending with <c>/</c> or empty.</summary>
    public string Prefix { get => Get<string>() ?? ""; private set => Set(value); }
@@ -93,6 +110,40 @@ public sealed partial class ObjectStorageManagerVm
    /// <summary>Note of the bucket being edited.</summary>
    public string? BucketDraftNote { get => Get<string>(); set => Set(value); }
 
+   /// <summary>Application that manages the bucket being edited; <c>null</c> for an ordinary or new bucket.</summary>
+   public string? BucketDraftOwner {
+      get => Get<string>();
+      private set => Set(value, _ => {
+         NotifyChanged(nameof(IsBucketDraftManaged));
+         NotifyChanged(nameof(CanChooseBucketPolicy));
+         NotifyChanged(nameof(BucketPolicyHelp));
+         NotifyChanged(nameof(BucketDraftManagedCaption));
+      });
+   }
+
+   /// <summary>Description the application declared for the bucket being edited; read-only.</summary>
+   public string? BucketDraftDescription { get => Get<string>(); private set => Set(value); }
+
+   /// <summary>The managed bucket being edited is no longer declared by the running API.</summary>
+   public bool IsBucketDraftUndeclared { get => Get<bool>(); private set => Set(value); }
+
+   /// <summary>The bucket being edited is managed by an application.</summary>
+   public bool IsBucketDraftManaged => BucketDraftOwner is not null;
+
+   /// <summary>The policy of the bucket being edited can be chosen (not for a managed bucket).</summary>
+   public bool CanChooseBucketPolicy => !IsBucketDraftManaged;
+
+   /// <summary>"Managed by ..." caption of the bucket being edited.</summary>
+   public string BucketDraftManagedCaption => BucketDraftOwner is { } owner ? $"Managed by {owner}" : "";
+
+   /// <summary>Hover help of the policy field; explains why it is locked for a managed bucket.</summary>
+   public string BucketPolicyHelp => IsBucketDraftManaged
+      ? "This bucket is managed by its application and keeps its own policy. Change volumes, replicas, retention, quotas and maximum object size in that policy on the Policies tab."
+      : "The policy decides volumes, replicas, version retention, quotas and public access of the bucket. Only an active policy can be chosen for a new bucket or a change; policies of managed buckets are not offered.";
+
+   /// <summary>Policies the bucket editor offers: every policy that no managed bucket owns, plus the edited bucket's own.</summary>
+   public ObservableCollection<StorePolicyInfo> BucketPolicyChoices { get; } = [];
+
    /// <summary>Bucket states with captions.</summary>
    public StoreOption<StoreBucketState>[] BucketStates { get; } = [new(StoreBucketState.Active, "Active"), new(StoreBucketState.ReadOnly, "Read-only")];
 
@@ -115,25 +166,28 @@ public sealed partial class ObjectStorageManagerVm
    #endregion
 
    private void RegisterBucketCommands() {
-      RegisterCommand(nameof(NewBucketCommand), NewBucketCommand, () => CanBrowse && Policies.Count > 0);
+      RegisterCommand(nameof(NewBucketCommand), NewBucketCommand, () => CanBrowse && Policies.Any(p => !p.IsManaged));
       RegisterCommand(nameof(EditBucketCommand), EditBucketCommand, () => CanActOnBucket && !IsBrowsing);
-      RegisterCommand(nameof(DeleteBucketCommand), DeleteBucketCommand, () => CanActOnBucket && !IsBrowsing);
+      RegisterCommand(nameof(DeleteBucketCommand), DeleteBucketCommand, () => CanActOnBucket && !IsBrowsing && SelectedBucket is { IsManaged: false });
+      RegisterCommand(nameof(ReleaseBucketCommand), ReleaseBucketCommand, () => CanActOnBucket && !IsBrowsing && SelectedBucket is { IsUndeclared: true });
       RegisterCommand(nameof(OpenBucketCommand), OpenBucketCommand, () => CanActOnBucket && !IsBrowsing);
       RegisterCommand(nameof(SaveBucketCommand), SaveBucketCommand, () => CanEdit && (IsBucketEditorOpen || (IsBucketPage && IsLoaded && !IsEditorOpen)));
       RegisterCommand(nameof(OpenBucketPageCommand), OpenBucketPageCommand, () => CanActOnBucket && !IsBucketPage && NavigationEntry is not null);
-      RegisterCommand(nameof(NewBucketPageCommand), NewBucketPageCommand, () => CanBrowse && !IsBucketPage && Policies.Count > 0 && NavigationEntry is not null);
+      RegisterCommand(nameof(NewBucketPageCommand), NewBucketPageCommand,
+         () => CanBrowse && !IsBucketPage && Policies.Any(p => !p.IsManaged) && NavigationEntry is not null);
       RegisterCommand(nameof(CloseBrowserCommand), CloseBrowserCommand, () => CanBrowse && IsBrowsing);
       RegisterCommand<StoreCrumb>(nameof(NavigateCrumbCommand), NavigateCrumbCommand, c => CanBrowse && IsBrowsing && c is not null && c.Prefix != Prefix);
       RegisterCommand(nameof(OpenItemCommand), OpenItemCommand, () => CanBrowse && IsBrowsing && SelectedItem is not null);
-      RegisterCommand(nameof(UploadCommand), UploadCommand, () => CanBrowse && IsBrowsing && OpenBucket?.State == StoreBucketState.Active);
+      RegisterCommand(nameof(UploadCommand), UploadCommand, () => CanBrowse && IsBrowsing && CanChangeContents && OpenBucket?.State == StoreBucketState.Active);
       RegisterCommand(nameof(DownloadCommand), DownloadCommand, () => CanActOnItem && IsBrowsing);
-      RegisterCommand(nameof(DeleteObjectCommand), DeleteObjectCommand, () => CanActOnItem && IsBrowsing && OpenBucket?.State == StoreBucketState.Active);
+      RegisterCommand(nameof(DeleteObjectCommand), DeleteObjectCommand,
+         () => CanActOnItem && IsBrowsing && CanChangeContents && OpenBucket?.State == StoreBucketState.Active);
       RegisterCommand(nameof(VersionsCommand), VersionsCommand, () => CanActOnItem && IsBrowsing);
       RegisterCommand(nameof(LoadMoreCommand), LoadMoreCommand, () => CanBrowse && IsBrowsing && HasMore);
       RegisterCommand(nameof(CloseEditorCommand), CloseEditorCommand, () => IsNotBusy);
       RegisterCommand(nameof(RestoreVersionCommand), RestoreVersionCommand,
-         () => CanEdit && IsVersionsOpen && SelectedVersion is { IsDeleteMarker: false, IsCurrent: false } && OpenBucket?.State == StoreBucketState.Active);
-      RegisterCommand(nameof(PurgeVersionCommand), PurgeVersionCommand, () => CanEdit && IsVersionsOpen && SelectedVersion is not null);
+         () => CanEdit && IsVersionsOpen && CanChangeContents && SelectedVersion is { IsDeleteMarker: false, IsCurrent: false } && OpenBucket?.State == StoreBucketState.Active);
+      RegisterCommand(nameof(PurgeVersionCommand), PurgeVersionCommand, () => CanEdit && IsVersionsOpen && CanChangeContents && SelectedVersion is not null);
       RegisterCommand(nameof(DownloadVersionCommand), DownloadVersionCommand, () => CanEdit && IsVersionsOpen && SelectedVersion is { IsDeleteMarker: false });
    }
 
@@ -150,7 +204,8 @@ public sealed partial class ObjectStorageManagerVm
       _bucketEditId = null;
       IsNewBucket = true;
       BucketDraftName = "";
-      BucketDraftPolicy = Policies.FirstOrDefault(p => p.State == StorePolicyState.Active);
+      SetBucketDraftOwner(null);
+      BucketDraftPolicy = BucketPolicyChoices.FirstOrDefault(p => p.State == StorePolicyState.Active);
       BucketDraftState = StoreBucketState.Active;
       BucketDraftNote = null;
       IsBucketEditorOpen = true;
@@ -162,10 +217,24 @@ public sealed partial class ObjectStorageManagerVm
       _bucketEditId = bucket.Id;
       IsNewBucket = false;
       BucketDraftName = bucket.Name;
-      BucketDraftPolicy = Policies.FirstOrDefault(p => p.Id == bucket.PolicyId);
+      SetBucketDraftOwner(bucket);
+      BucketDraftPolicy = BucketPolicyChoices.FirstOrDefault(p => p.Id == bucket.PolicyId);
       BucketDraftState = bucket.State;
       BucketDraftNote = bucket.Note;
       IsBucketEditorOpen = true;
+   }
+
+   // Owner, description and the policy list of the bucket editor follow the bucket being edited (null for a new one).
+   private void SetBucketDraftOwner(StoreBucketInfo? bucket) {
+      BucketDraftOwner = bucket?.Owner;
+      BucketDraftDescription = bucket?.Description;
+      IsBucketDraftUndeclared = bucket?.IsUndeclared == true;
+      FillBucketPolicyChoices(bucket?.PolicyId);
+   }
+
+   private void FillBucketPolicyChoices(string? ownPolicyId) {
+      BucketPolicyChoices.Clear();
+      foreach (var policy in Policies.Where(p => !p.IsManaged || p.Id == ownPolicyId)) BucketPolicyChoices.Add(policy);
    }
 
    /// <summary>Saves the bucket editor.</summary>
@@ -190,6 +259,22 @@ public sealed partial class ObjectStorageManagerVm
          await Service.PostMeta_StoreBucketDelete(bucket.Id);
          await LoadBucketsAsync();
          Status = $"Bucket '{bucket.Name}' deleted.";
+      });
+   }
+
+   /// <summary>
+   /// Turns the selected managed bucket that is no longer declared into an ordinary bucket after confirmation; its
+   /// contents stay and it can be changed or deleted like any other bucket afterwards.
+   /// </summary>
+   public async Task ReleaseBucketCommand() {
+      if (!CanActOnBucket || SelectedBucket is not { IsUndeclared: true } bucket) return;
+      if (Confirm?.Invoke($"Release bucket '{bucket.Name}'? {bucket.Owner} no longer declares it. It becomes an ordinary bucket with its " +
+                          "contents and policy kept, and can then be changed or deleted like any other bucket.", "Release bucket") != true) return;
+      await RunAsync("Releasing bucket...", async () => {
+         await Service.PostMeta_StoreBucketRelease(bucket.Id);
+         await LoadSettingsAsync();
+         await LoadBucketsAsync();
+         Status = $"Bucket '{bucket.Name}' released.";
       });
    }
 
@@ -260,7 +345,7 @@ public sealed partial class ObjectStorageManagerVm
 
    /// <summary>Uploads local files to the current prefix of the open bucket, one after another; a file with the same key becomes a new version.</summary>
    public async Task UploadFilesAsync(IReadOnlyList<string> paths) {
-      if (OpenBucket is not { } bucket || paths.Count == 0) return;
+      if (OpenBucket is not { IsManaged: false } bucket || paths.Count == 0) return;
       var done = 0;
       await RunAsync("Uploading...", async () => {
          foreach (var path in paths.Where(File.Exists)) {

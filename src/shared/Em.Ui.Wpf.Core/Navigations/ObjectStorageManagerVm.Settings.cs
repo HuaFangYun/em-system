@@ -82,6 +82,27 @@ public sealed partial class ObjectStorageManagerVm
    /// <summary>Public access.</summary>
    public StoreAccess PolicyAccess { get => Get<StoreAccess>(); set => Set(value); }
 
+   /// <summary>Managed bucket the edited policy belongs to; <c>null</c> for an ordinary or new policy.</summary>
+   public string? PolicyManagedBucket {
+      get => Get<string>();
+      private set => Set(value, _ => {
+         NotifyChanged(nameof(IsPolicyManaged));
+         NotifyChanged(nameof(CanChangePolicyAccess));
+         NotifyChanged(nameof(PolicyAccessHelp));
+      });
+   }
+
+   /// <summary>The edited policy belongs to a managed bucket.</summary>
+   public bool IsPolicyManaged => PolicyManagedBucket is not null;
+
+   /// <summary>The access of the edited policy can be changed (not for a managed policy).</summary>
+   public bool CanChangePolicyAccess => !IsPolicyManaged;
+
+   /// <summary>Hover help of the access field; explains why it is locked for a managed policy.</summary>
+   public string PolicyAccessHelp => PolicyManagedBucket is { } bucket
+      ? $"This policy belongs to managed bucket '{bucket}'. Its access is set by the application that manages the bucket and cannot change here; every other field can."
+      : "Private: objects are only reachable through Object Storage Manager and server-side code. PublicRead: anyone can read objects without signing in at GET /store/<bucket>/<key>; uploads still need the manager.";
+
    /// <summary>Copies written before an upload succeeds.</summary>
    public int PolicyReplicaMin { get => Get<int>(); set => Set(value); }
 
@@ -195,6 +216,7 @@ public sealed partial class ObjectStorageManagerVm
       if (!CanBrowse) return;
       _policyEditId = null;
       PolicyName = "";
+      PolicyManagedBucket = null;
       PolicyState = StorePolicyState.Active;
       PolicyAccess = StoreAccess.Private;
       PolicyReplicaMin = PolicyReplicaTarget = 1;
@@ -209,6 +231,7 @@ public sealed partial class ObjectStorageManagerVm
       if (!CanBrowse || SelectedPolicy is not { } p) return;
       _policyEditId = p.Id;
       PolicyName = p.Name;
+      PolicyManagedBucket = p.ManagedBucket;
       PolicyState = p.State;
       PolicyAccess = p.Access;
       PolicyReplicaMin = p.ReplicaMin;

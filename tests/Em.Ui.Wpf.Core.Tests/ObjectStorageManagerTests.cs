@@ -168,6 +168,105 @@ public class ObjectStorageManagerTests
    }
 
    [Fact]
+   public async Task ManagedBucketIsReadOnlyHere_AndItsPolicyIsNotOffered() {
+      var service = StubService.WithManaged(declared: true);
+      var asked = 0;
+      var vm = new ObjectStorageManagerVm(service) { Confirm = (_, _) => ++asked > 0 };
+      await vm.ReloadAsync();
+      vm.SelectedBucket = vm.Buckets.Single(b => b.Name == "app-files");
+      Assert.False(vm.Commands[nameof(vm.DeleteBucketCommand)]!.CanExecute());
+      Assert.False(vm.Commands[nameof(vm.ReleaseBucketCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.EditBucketCommand)]!.CanExecute());
+
+      vm.EditBucketCommand();
+      Assert.True(vm.IsBucketDraftManaged);
+      Assert.False(vm.CanChooseBucketPolicy);
+      Assert.Equal("Managed by Sample App", vm.BucketDraftManagedCaption);
+      Assert.Equal("Files of the sample module.", vm.BucketDraftDescription);
+      Assert.Equal("pol-m", vm.BucketDraftPolicy?.Id);
+      Assert.Contains("own policy", vm.BucketPolicyHelp);
+      vm.CloseEditorCommand();
+
+      vm.NewBucketCommand();
+      Assert.False(vm.IsBucketDraftManaged);
+      Assert.True(vm.CanChooseBucketPolicy);
+      Assert.Equal(["pol"], vm.BucketPolicyChoices.Select(p => p.Id));
+      vm.CloseEditorCommand();
+
+      vm.SelectedBucket = vm.Buckets.Single(b => b.Name == "app-files");
+      await vm.OpenBucketCommand();
+      Assert.True(vm.IsOpenBucketManaged);
+      Assert.False(vm.CanChangeContents);
+      Assert.Contains("managed by Sample App", vm.ManagedNotice);
+      Assert.False(vm.Commands[nameof(vm.UploadCommand)]!.CanExecute());
+      vm.SelectedItem = vm.Items.Single(i => !i.IsFolder);
+      Assert.False(vm.Commands[nameof(vm.DeleteObjectCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.DownloadCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.VersionsCommand)]!.CanExecute());
+      await vm.UploadFilesAsync([typeof(ObjectStorageManagerTests).Assembly.Location]);
+      Assert.Equal(0, service.Uploads);
+
+      await vm.VersionsCommand();
+      vm.SelectedVersion = vm.Versions.Single(v => !v.IsCurrent);
+      Assert.False(vm.Commands[nameof(vm.RestoreVersionCommand)]!.CanExecute());
+      Assert.False(vm.Commands[nameof(vm.PurgeVersionCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.DownloadVersionCommand)]!.CanExecute());
+   }
+
+   [Fact]
+   public async Task UndeclaredManagedBucketCanBeReleasedAfterConfirmation() {
+      var service = StubService.WithManaged(declared: false);
+      var answer = false;
+      var vm = new ObjectStorageManagerVm(service) { Confirm = (_, _) => answer };
+      await vm.ReloadAsync();
+      vm.SelectedBucket = vm.Buckets.Single(b => b.Name == "app-files");
+      Assert.True(vm.SelectedBucket!.IsUndeclared);
+      Assert.False(vm.Commands[nameof(vm.DeleteBucketCommand)]!.CanExecute());
+      Assert.True(vm.Commands[nameof(vm.ReleaseBucketCommand)]!.CanExecute());
+
+      await vm.ReleaseBucketCommand();
+      Assert.Null(service.Released);
+      answer = true;
+      await vm.ReleaseBucketCommand();
+      Assert.Equal("bm", service.Released);
+      Assert.Contains("released", vm.Status);
+
+      vm.SelectedBucket = vm.Buckets.Single(b => b.Name == "files");
+      Assert.False(vm.Commands[nameof(vm.ReleaseBucketCommand)]!.CanExecute());
+   }
+
+   [Fact]
+   public async Task ManagedPolicyKeepsItsAccessInTheEditor() {
+      var vm = new ObjectStorageManagerVm(StubService.WithManaged(declared: true));
+      await vm.ReloadAsync();
+      vm.SelectedPolicy = vm.Policies.Single(p => p.Id == "pol-m");
+      vm.EditPolicyCommand();
+      Assert.True(vm.IsPolicyManaged);
+      Assert.False(vm.CanChangePolicyAccess);
+      Assert.Contains("app-files", vm.PolicyAccessHelp);
+      vm.CloseEditorCommand();
+
+      vm.SelectedPolicy = vm.Policies.Single(p => p.Id == "pol");
+      vm.EditPolicyCommand();
+      Assert.False(vm.IsPolicyManaged);
+      Assert.True(vm.CanChangePolicyAccess);
+      vm.CloseEditorCommand();
+      vm.NewPolicyCommand();
+      Assert.True(vm.CanChangePolicyAccess);
+   }
+
+   [Fact]
+   public async Task BucketPageOfManagedBucketLocksPolicyAndContents() {
+      var vm = new ObjectStorageManagerVm(StubService.WithManaged(declared: true));
+      await vm.LoadBucketPageAsync(StoreBucketNavigationPayload.Open("app-files"));
+      Assert.True(vm.IsBucketDraftManaged);
+      Assert.False(vm.CanChooseBucketPolicy);
+      Assert.Equal("pol-m", vm.BucketDraftPolicy?.Id);
+      Assert.True(vm.Commands[nameof(vm.SaveBucketCommand)]!.CanExecute());
+      Assert.False(vm.Commands[nameof(vm.UploadCommand)]!.CanExecute());
+   }
+
+   [Fact]
    public void GuessMimeUsesExtension() {
       Assert.Equal("image/png", ObjectStorageManagerVm.GuessMime("a/b.PNG"));
       Assert.Equal("application/octet-stream", ObjectStorageManagerVm.GuessMime("noext"));
@@ -177,7 +276,23 @@ public class ObjectStorageManagerTests
    {
       public string? LastPrefix;
       public StorePolicySave? LastPolicySave;
-      public int GcRuns, LastGrace, BucketDeletes;
+      public int GcRuns, LastGrace, BucketDeletes, Uploads;
+      public string? Released;
+      private StoreBucketInfo[]? _buckets;
+      private StorePolicyInfo[]? _policies;
+
+      /// <summary>Adds managed bucket <c>app-files</c> (ID <c>bm</c>) on its own policy <c>pol-m</c>.</summary>
+      public static StubService WithManaged(bool declared) {
+         var service = new StubService();
+         service._policies = [
+            new("pol", "Default", StorePolicyState.Active, null, 1, 1, null, null, null, null, null, StoreAccess.Private, ["vol-a"], 1),
+            new("pol-m", "app-files (managed)", StorePolicyState.Active, null, 1, 1, null, null, null, null, null, StoreAccess.Private, ["vol-a"], 1, "app-files")];
+         service._buckets = [
+            new("bm", "app-files", "pol-m", "app-files (managed)", StoreBucketState.Active, null, 10, 1, null, null, null, StoreAccess.Private,
+               DateTime.UtcNow, "Sample App", "Files of the sample module.", declared),
+            new("b1", "files", "pol", "Default", StoreBucketState.Active, null, 10, 1, null, null, null, StoreAccess.Private, DateTime.UtcNow)];
+         return service;
+      }
 
       private static readonly StoreVolumeValidation Ok = new(true, "/srv", "OK", null, true);
       private static readonly StoreObjectInfo Readme = new("o1", "b1", "readme.txt", 1, 10, "text/plain", false, DateTime.UtcNow, "ab");
@@ -189,19 +304,23 @@ public class ObjectStorageManagerTests
       public Task<StoreVolumeValidation> PostGetMeta_StoreVolumeValidate(StoreVolumeSave draft) => Task.FromResult(Ok);
       public Task<StoreVolumeInfo> PostGetMeta_StoreVolumeSave(StoreVolumeSave request) => throw new NotSupportedException();
       public Task PostMeta_StoreVolumeDelete(string volumeId) => Task.CompletedTask;
-      public Task<StorePolicyInfo[]> GetMeta_StorePolicies() => Task.FromResult<StorePolicyInfo[]>([
+      public Task<StorePolicyInfo[]> GetMeta_StorePolicies() => Task.FromResult<StorePolicyInfo[]>(_policies ?? [
          new("pol", "Default", StorePolicyState.Active, null, 1, 1, null, null, null, null, null, StoreAccess.Private, ["vol-a"], 1)]);
       public Task<StorePolicyInfo> PostGetMeta_StorePolicySave(StorePolicySave request) {
          LastPolicySave = request;
          return Task.FromResult(new StorePolicyInfo("pol2", request.Name, request.State, null, 1, 1, null, null, null, null, null, request.Access, request.VolumeIds, 0));
       }
       public Task PostMeta_StorePolicyDelete(string policyId) => Task.CompletedTask;
-      public Task<StoreBucketInfo[]> GetMeta_StoreBuckets() => Task.FromResult<StoreBucketInfo[]>([
+      public Task<StoreBucketInfo[]> GetMeta_StoreBuckets() => Task.FromResult<StoreBucketInfo[]>(_buckets ?? [
          new("b1", "files", "pol", "Default", StoreBucketState.Active, null, 10, 1, null, null, null, StoreAccess.Private, DateTime.UtcNow)]);
       public Task<StoreBucketInfo> PostGetMeta_StoreBucketSave(StoreBucketSave request) => throw new NotSupportedException();
       public Task PostMeta_StoreBucketDelete(string bucketId) {
          BucketDeletes++;
          throw new ActionException("The bucket still holds objects, including deleted objects with history. Purge them first.", 409);
+      }
+      public Task PostMeta_StoreBucketRelease(string bucketId) {
+         Released = bucketId;
+         return Task.CompletedTask;
       }
       public Task<StoreObjectListing> GetMeta_StoreObjects(string bucketId, string? prefix, string? delimiter, string? continuation, int limit) {
          LastPrefix = prefix;
@@ -210,10 +329,15 @@ public class ObjectStorageManagerTests
             : new StoreObjectListing(prefix, "/", [], [Readme with { Key = prefix + "a.jpg" }], null));
       }
       public Task<StoreObjectInfo> GetMeta_StoreObject(string bucketId, string key) => Task.FromResult(Readme);
-      public Task<StoreObjectInfo> PostGetMeta_StoreObjectUpload(StoreUploadRequest request, Stream content) => Task.FromResult(Readme);
+      public Task<StoreObjectInfo> PostGetMeta_StoreObjectUpload(StoreUploadRequest request, Stream content) {
+         Uploads++;
+         return Task.FromResult(Readme);
+      }
       public Task<Stream> GetMeta_StoreObjectDownload(string bucketId, string key, int? version) => Task.FromResult<Stream>(new MemoryStream());
       public Task PostMeta_StoreObjectDelete(string bucketId, string key) => Task.CompletedTask;
-      public Task<StoreObjectVersionInfo[]> GetMeta_StoreObjectVersions(string bucketId, string key) => Task.FromResult<StoreObjectVersionInfo[]>([]);
+      public Task<StoreObjectVersionInfo[]> GetMeta_StoreObjectVersions(string bucketId, string key) => Task.FromResult<StoreObjectVersionInfo[]>([
+         new("o1", 2, true, false, 10, "text/plain", "cd", DateTime.UtcNow, null),
+         new("o1", 1, false, false, 9, "text/plain", "ab", DateTime.UtcNow, null)]);
       public Task<StoreObjectInfo> PostGetMeta_StoreObjectRestore(string bucketId, string key, int version) => Task.FromResult(Readme);
       public Task PostMeta_StoreObjectVersionPurge(string bucketId, string key, int version) => Task.CompletedTask;
       public Task<StoreGcReview> GetMeta_StoreGcReview(int graceHours) => Task.FromResult(new StoreGcReview(graceHours, 0, 1, 5, 1, 5, []));

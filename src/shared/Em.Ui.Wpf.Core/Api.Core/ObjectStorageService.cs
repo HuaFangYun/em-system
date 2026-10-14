@@ -32,6 +32,8 @@ public sealed class ObjectStorageService(EmApp app) : ServiceWpfBase(app), IObje
    /// <inheritdoc />
    public Task PostMeta_StoreBucketDelete(string bucketId) => PostAsync(nameof(PostMeta_StoreBucketDelete), bucketId);
    /// <inheritdoc />
+   public Task PostMeta_StoreBucketRelease(string bucketId) => PostAsync(nameof(PostMeta_StoreBucketRelease), bucketId);
+   /// <inheritdoc />
    public Task<StoreObjectListing> GetMeta_StoreObjects(string bucketId, string? prefix, string? delimiter, string? continuation, int limit) =>
       GetAsync<StoreObjectListing>(nameof(GetMeta_StoreObjects), bucketId, prefix!, delimiter!, continuation!, limit);
    /// <inheritdoc />

@@ -10,6 +10,24 @@ public sealed partial class ObjectStorageServices
    private static bool IsUniqueConflict(DbUpdateException ex) =>
       ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 };
 
+   /// <summary>
+   /// Managed bucket name per policy ID, for every policy a managed bucket uses (or only <paramref name="policyId"/>).
+   /// A policy is managed while a managed bucket uses it; the policy row itself carries no mark.
+   /// </summary>
+   private async Task<Dictionary<string, string>> ManagedPoliciesAsync(string? policyId = null) {
+      var query = db.Buckets.Where(b => b.json_object != null);
+      if (policyId is not null) query = query.Where(b => b.cStorePolicyId == policyId);
+      var rows = await query.Select(b => new { b.cStorePolicyId, b.cStoreBucketName, b.json_object }).ToListAsync(AbortToken);
+      var map = new Dictionary<string, string>(StringComparer.Ordinal);
+      foreach (var row in rows.Where(r => ManagedBucketJson.Owner(r.json_object) is not null))
+         map.TryAdd(row.cStorePolicyId, row.cStoreBucketName);
+      return map;
+   }
+
+   /// <summary>409 for a change that belongs to the application managing the bucket.</summary>
+   private static ActionException ManagedConflict(string bucketName, string owner, string what) =>
+      new($"Bucket '{bucketName}' is managed by {owner}; {what}", 409);
+
    #region Volumes
 
    /// <inheritdoc />
@@ -122,11 +140,12 @@ public sealed partial class ObjectStorageServices
       var volumes = await db.PolicyVolumes.OrderBy(p => p.cStorePolicyVolumeOrder).ToListAsync(AbortToken);
       var buckets = await db.Buckets.GroupBy(b => b.cStorePolicyId).Select(g => new { g.Key, Count = g.Count() })
          .ToDictionaryAsync(x => x.Key, x => x.Count, AbortToken);
+      var managed = await ManagedPoliciesAsync();
       return rows.Select(p => new StorePolicyInfo(p.cStorePolicyId, p.cStorePolicyName, (StorePolicyState)p.cStorePolicyState, p.cStorePolicyNote,
          p.cStorePolicyReplicaMin, p.cStorePolicyReplicaTarget, p.cStorePolicyKeepVersions, p.cStorePolicyKeepDays, p.cStorePolicyQuotaBytes,
          p.cStorePolicyQuotaObjects, p.cStorePolicyMaxObjectBytes, (StoreAccess)p.cStorePolicyAccess,
          volumes.Where(v => v.cStorePolicyId == p.cStorePolicyId).Select(v => v.cStoreVolumeId).ToArray(),
-         buckets.GetValueOrDefault(p.cStorePolicyId))).ToArray();
+         buckets.GetValueOrDefault(p.cStorePolicyId), managed.GetValueOrDefault(p.cStorePolicyId))).ToArray();
    }
 
    /// <summary>Checks the rules of a policy draft; throws 400 for the first rule it breaks.</summary>
@@ -167,6 +186,10 @@ public sealed partial class ObjectStorageServices
          else {
             row = await db.Policies.AsTracking().SingleOrDefaultAsync(p => p.cStorePolicyId == request.Id, AbortToken)
                ?? throw new ActionException("Policy not found.", 404);
+            if (row.cStorePolicyAccess != (int)request.Access &&
+                (await ManagedPoliciesAsync(row.cStorePolicyId)).TryGetValue(row.cStorePolicyId, out var managedBucket))
+               throw new ActionException($"Policy '{row.cStorePolicyName}' belongs to managed bucket '{managedBucket}'; its access is set by the " +
+                  "application that manages the bucket and cannot change here. Every other field can.", 409);
             await db.PolicyVolumes.Where(p => p.cStorePolicyId == row.cStorePolicyId).ExecuteDeleteAsync(AbortToken);
          }
          row.cStorePolicyName = name;
@@ -201,6 +224,8 @@ public sealed partial class ObjectStorageServices
    public async Task PostMeta_StorePolicyDelete(string policyId) {
       await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, AbortToken);
       if (!await db.Policies.AnyAsync(p => p.cStorePolicyId == policyId, AbortToken)) throw new ActionException("Policy not found.", 404);
+      if ((await ManagedPoliciesAsync(policyId)).TryGetValue(policyId, out var managedBucket))
+         throw new ActionException($"The policy belongs to managed bucket '{managedBucket}' and cannot be deleted.", 409);
       if (await db.Buckets.AnyAsync(b => b.cStorePolicyId == policyId, AbortToken)) throw new ActionException("The policy is used by a bucket.", 409);
       await db.PolicyVolumes.Where(p => p.cStorePolicyId == policyId).ExecuteDeleteAsync(AbortToken);
       await db.Policies.Where(p => p.cStorePolicyId == policyId).ExecuteDeleteAsync(AbortToken);
@@ -220,10 +245,12 @@ public sealed partial class ObjectStorageServices
               orderby b.cStoreBucketName
               select new { b, p }).ToListAsync(AbortToken)).Select(r => BucketInfo(r.b, r.p)).ToArray();
 
-   private static StoreBucketInfo BucketInfo(ta_StoreBucket b, ta_StorePolicy p) =>
-      new(b.cStoreBucketId, b.cStoreBucketName, p.cStorePolicyId, p.cStorePolicyName, (StoreBucketState)b.cStoreBucketState, b.cStoreBucketNote,
+   private StoreBucketInfo BucketInfo(ta_StoreBucket b, ta_StorePolicy p) {
+      var (owner, description) = ManagedBucketJson.Read(b.json_object);
+      return new(b.cStoreBucketId, b.cStoreBucketName, p.cStorePolicyId, p.cStorePolicyName, (StoreBucketState)b.cStoreBucketState, b.cStoreBucketNote,
          b.cStoreBucketBytes, b.cStoreBucketObjects, p.cStorePolicyQuotaBytes, p.cStorePolicyQuotaObjects, p.cStorePolicyMaxObjectBytes,
-         (StoreAccess)p.cStorePolicyAccess, b.datestamp);
+         (StoreAccess)p.cStorePolicyAccess, b.datestamp, owner, description, owner is not null && runtime.ManagedBuckets.IsDeclared(b.cStoreBucketName));
+   }
 
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.SettingsClaim)]
@@ -239,6 +266,7 @@ public sealed partial class ObjectStorageServices
          ta_StoreBucket row;
          if (string.IsNullOrEmpty(request.Id)) {
             if (policy.cStorePolicyState != (int)StorePolicyState.Active) throw new ActionException("The policy is disabled.", 400);
+            await RequireUnmanagedPolicyAsync(policy);
             row = new ta_StoreBucket { cStoreBucketId = Ulid.NewUlid().ToString(), cStoreBucketName = StoreNames.Bucket(request.Name), datestamp = now };
             db.Buckets.Add(row);
          }
@@ -247,8 +275,12 @@ public sealed partial class ObjectStorageServices
                .AsTracking().SingleOrDefaultAsync(AbortToken) ?? throw new ActionException("Bucket not found.", 404);
             if (!string.IsNullOrEmpty(request.Name) && request.Name != row.cStoreBucketName)
                throw new ActionException("A bucket name cannot change.", 400);
-            if (row.cStorePolicyId != policy.cStorePolicyId && policy.cStorePolicyState != (int)StorePolicyState.Active)
-               throw new ActionException("The policy is disabled.", 400);
+            if (row.cStorePolicyId != policy.cStorePolicyId) {
+               if (ManagedBucketJson.Owner(row.json_object) is { } owner)
+                  throw ManagedConflict(row.cStoreBucketName, owner, "it keeps its own policy. Change volumes, replicas, retention and quotas in that policy instead.");
+               if (policy.cStorePolicyState != (int)StorePolicyState.Active) throw new ActionException("The policy is disabled.", 400);
+               await RequireUnmanagedPolicyAsync(policy);
+            }
          }
          row.cStorePolicyId = policy.cStorePolicyId;
          row.cStoreBucketState = (int)request.State;
@@ -266,17 +298,53 @@ public sealed partial class ObjectStorageServices
       return (await GetMeta_StoreBuckets()).Single(b => b.Id == id);
    }
 
+   private async Task RequireUnmanagedPolicyAsync(ta_StorePolicy policy) {
+      if ((await ManagedPoliciesAsync(policy.cStorePolicyId)).TryGetValue(policy.cStorePolicyId, out var managedBucket))
+         throw new ActionException($"Policy '{policy.cStorePolicyName}' belongs to managed bucket '{managedBucket}' and cannot be used by another bucket.", 409);
+   }
+
    /// <inheritdoc />
    [PostAction(claim: IObjectStorageServices.SettingsClaim)]
    public async Task PostMeta_StoreBucketDelete(string bucketId) {
       await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, AbortToken);
       var bucket = await db.Buckets.FromSql($"SELECT * FROM dbo.ta_StoreBucket WITH (UPDLOCK, ROWLOCK) WHERE cStoreBucketId = {bucketId}")
          .SingleOrDefaultAsync(AbortToken) ?? throw new ActionException("Bucket not found.", 404);
+      if (ManagedBucketJson.Owner(bucket.json_object) is { } owner)
+         throw ManagedConflict(bucket.cStoreBucketName, owner, runtime.ManagedBuckets.IsDeclared(bucket.cStoreBucketName)
+            ? "it cannot be deleted while the application declares it."
+            : "the application no longer declares it. Release it first; it can be deleted as an ordinary bucket afterwards.");
       if (await db.Objects.AnyAsync(o => o.cStoreBucketId == bucket.cStoreBucketId, AbortToken))
          throw new ActionException("The bucket still holds objects, including deleted objects with history. Purge them first.", 409);
       await db.Buckets.Where(b => b.cStoreBucketId == bucketId).ExecuteDeleteAsync(AbortToken);
       await tx.CommitAsync(AbortToken);
       await AuditSystemAsync("System.ObjectStorage", bucketId, "bucket.deleted", $"Deleted bucket {bucket.cStoreBucketName}", "bucket");
+   }
+
+   /// <inheritdoc />
+   [PostAction(claim: IObjectStorageServices.SettingsClaim)]
+   public async Task PostMeta_StoreBucketRelease(string bucketId) {
+      var (name, owner) = await ReleaseBucketCoreAsync(bucketId);
+      await AuditSystemAsync("System.ObjectStorage", name, "bucket.released", $"Released managed bucket {name} of {owner}", "bucket", new { owner });
+   }
+
+   /// <summary>Body of <see cref="PostMeta_StoreBucketRelease"/> without the audit entry; returns the bucket name and its former owner.</summary>
+   internal async Task<(string Name, string Owner)> ReleaseBucketCoreAsync(string bucketId) {
+      try {
+         await using var tx = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, AbortToken);
+         var bucket = await db.Buckets.FromSql($"SELECT * FROM dbo.ta_StoreBucket WITH (UPDLOCK, ROWLOCK) WHERE cStoreBucketId = {bucketId}")
+            .AsTracking().SingleOrDefaultAsync(AbortToken) ?? throw new ActionException("Bucket not found.", 404);
+         var (owner, description) = ManagedBucketJson.Read(bucket.json_object);
+         if (owner is null) throw new ActionException($"Bucket '{bucket.cStoreBucketName}' is not a managed bucket.", 409);
+         if (runtime.ManagedBuckets.IsDeclared(bucket.cStoreBucketName))
+            throw ManagedConflict(bucket.cStoreBucketName, owner, "it is still declared by the running application and cannot be released.");
+         // The description stays as a record of what the contents are.
+         bucket.json_object = ManagedBucketJson.Write(bucket.json_object, null, description);
+         bucket.ustamp = DateTime.UtcNow;
+         await db.SaveChangesAsync(AbortToken);
+         await tx.CommitAsync(AbortToken);
+         return (bucket.cStoreBucketName, owner);
+      }
+      finally { db.ChangeTracker.Clear(); }
    }
 
    #endregion

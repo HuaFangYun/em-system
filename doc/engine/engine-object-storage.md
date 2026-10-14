@@ -25,7 +25,8 @@ is **not** implemented; the design only keeps the door open for an S3 adapter la
 2. In the API host, call `builder.AddObjectStorage()`. The sample host `Em.Api` does this unless the module
    switch `"modules": { "objectStorage": false }` (or `EM_MODULE_OBJECTSTORAGE=false`) turns it off.
 3. Give administrators the claims below, open **Object Storage Manager**, create at least one volume, one
-   policy and one bucket.
+   policy and one bucket. Buckets that modules declare as [managed buckets](#managed-buckets) need none of
+   this: they are created at startup on a default volume.
 
 Startup fails with a clear message when the tables or the schema version row (`ObjectStoreSchemaVersion` in
 `ta_Meta`) are missing.
@@ -99,7 +100,9 @@ Layout on disk:
 ## Using it from a module
 
 `IObjectStore` is scoped; take it from dependency injection in a service or a request handler. Buckets must
-already exist.
+already exist, except [managed buckets](#managed-buckets), which the module declares and the engine creates at
+startup. A module that owns its files should declare a managed bucket instead of asking an administrator to
+create one and checking it at runtime.
 
 ```csharp
 public sealed class InvoiceArchive(IObjectStore store)
@@ -137,6 +140,112 @@ keeps the no-overwrite rule (a key that already has any version is refused with 
 every version. It is not registered by the engine and does not replace the binary storage of the approval
 engine; create it yourself where a module wants it.
 
+## Managed buckets
+
+A **managed bucket** belongs to the application layer (a module) instead of an administrator. The module
+declares it in the API builder; at startup object storage creates it, gives it its own policy and locks it.
+The module then reads and writes it through `IObjectStore` with zero setup. Administrators keep the
+infrastructure side and can look at and download the contents, but cannot change them.
+
+### Declaring one
+
+```csharp
+public static void AddInvoiceModule(this EmAppBuilder builder)
+{
+   builder.AddManagedBucket("invoices", "Invoice",
+      "PDF copies of issued invoices, written by the Invoice module when an invoice is posted. " +
+      "Moving it to another volume does not move existing files; a smaller quota stops new invoices.",
+      o => {
+         o.KeepVersions = 10;
+         o.MaxObjectBytes = 50L * 1024 * 1024;
+      });
+}
+```
+
+| Parameter | Rule |
+| --- | --- |
+| `name` | Bucket name (S3 rules, see [Concepts](#concepts)). Declaring the same name twice throws `InvalidOperationException`. |
+| `owner` | Application or module shown as "Managed by &lt;owner&gt;", 1–100 characters. |
+| `description` | Required, 10–500 characters, written for administrators: what the bucket holds, which module fills it and what changing its volumes or quotas affects. Shown in the manager and not editable there. |
+| `configure` | Starting values of the bucket's policy (`ManagedBucketOptions`): `Access` (default `Private`), `MaxObjectBytes`, `KeepVersions`, `KeepDays`, `QuotaBytes`, `QuotaObjects`, `Note`. They follow the policy rules of the manager; an invalid value throws `ArgumentException` while the host is built. |
+
+Declarations may come before or after `AddObjectStorage()` in `Program.cs`. When the host does not call
+`AddObjectStorage()`, declarations are ignored without an error; a module that wants to run without object
+storage handles a missing `IObjectStore` as before.
+
+### What happens at startup
+
+After the schema check, for every declaration, in one serializable transaction each:
+
+1. **Bucket missing**: the engine makes sure the default volume exists, creates the policy
+   `<bucket> (managed)` from the declared values on that volume (one replica), then the bucket.
+2. **Ordinary bucket with that name already exists**: it is **adopted**. Its contents stay. When its policy is
+   used by other buckets too, the policy is copied (every value and the ordered volume list) to
+   `<bucket> (managed)` and the bucket moves to the copy, so locking it does not lock the other buckets.
+3. **Already managed**: owner and description are made equal to the declaration (a changed owner is logged as
+   information).
+4. **Always**: when the policy's access differs from the declared `Access`, it is set back, with a warning in
+   the log and an audit entry.
+
+Every other policy value is used **only when the policy is created**. Changes an administrator makes later
+(volumes, replicas, retention, quotas, maximum object size) are never overwritten. A failure stops startup with
+a message that names the bucket.
+
+The **default volume** is created once, only when a managed bucket needs a new policy: name
+`managed-default` (with `-2`, `-3`, … when taken), folder `ObjectStorageOptions.DefaultVolumePath`. Its ID is
+kept in `ta_Meta` (`ObjectStore.DefaultVolume`); when an administrator deletes it, a new one is created the
+next time it is needed. Set the folder in the host:
+
+```csharp
+builder.AddObjectStorage(o => o.DefaultVolumePath = @"D:\EmData\objectstore");
+```
+
+Without it the folder is `data/objectstore`, relative to the API content root. When the folder cannot be used
+(not writable, a drive root, …) startup fails with a message naming `DefaultVolumePath`.
+
+### What is locked
+
+| Who / what | Allowed | Refused (409) |
+| --- | --- | --- |
+| The module (`IObjectStore`) | Everything: put, delete, restore, purge | — |
+| Background work | Retention, garbage collection, replication, repair | — |
+| Administrator: bucket | State, note | Moving it to another policy, deleting it |
+| Administrator: its policy | Name, state, note, volumes, replicas, retention, quotas, maximum object size | Changing access, deleting it, giving it to another bucket |
+| Administrator: contents | Browse, object info, version list, download | Upload, delete, restore, permanent version delete |
+
+The upload refusal happens before the request body is read. The public `/store` endpoint follows the policy's
+access as for any bucket.
+
+### When a declaration disappears
+
+A managed bucket whose module no longer declares it (module removed, host turned it off) **stays locked** and
+is shown as **NOT DECLARED** in the manager. An administrator can then **Release** it
+(`PostMeta_StoreBucketRelease`, claim `Object Storage Settings Manage`): it becomes an ordinary bucket, its
+policy an ordinary policy, its contents and description stay, and it can be changed or deleted afterwards.
+Release refuses a bucket that is still declared or not managed (409).
+
+### Audit
+
+Group `System.ObjectStorage`: `bucket.provisioned` (created at startup), `bucket.adopted`,
+`bucket.access.enforced` and `bucket.released`. Entries written at startup carry the actor type `system`.
+
+### Upgrade notes
+
+- **No schema change.** Owner and description are kept in `ta_StoreBucket.json_object` (`owner`,
+  `description`), following the Dahlia Convention for columns added after a table is in use. Re-running
+  [`views/vi_StoreBucket.sql`](../sqlscript/mssql/views/vi_StoreBucket.sql) adds `cvStoreBucketOwner` and
+  `cvStoreBucketDescription` to the view; the engine itself does not read the view. `ObjectStoreSchemaVersion`
+  stays `1`.
+- **Contract additions in `Em.Libs`**: `StoreBucketInfo` gets `Owner`, `Description`, `IsDeclared` (plus the
+  computed `IsManaged` and `IsUndeclared`), `StorePolicyInfo` gets `ManagedBucket` (plus `IsManaged`), and
+  `IObjectStorageServices` gets `PostMeta_StoreBucketRelease`. The new record parameters are optional, so
+  existing constructor calls still compile; another implementation of `IObjectStorageServices` must add the
+  new action.
+- **Builder**: `AddObjectStorage()` is unchanged; the overload `AddObjectStorage(Action<ObjectStorageOptions>)`
+  and `AddManagedBucket(...)` are new.
+- A module that used to require an administrator-made bucket and check it at runtime can declare it instead;
+  an existing bucket of that name is adopted with its contents.
+
 ## Public read endpoint
 
 `GET` and `HEAD /store/<bucket>/<key>` serve the current version of an object in a bucket whose policy is
@@ -157,12 +266,13 @@ Keys are taken from the raw request path and percent-decoded once, so `a%20b/c.t
 | Status | `GetMeta_StoreStatus` (counters, volumes with problems, missing copies, under-replicated and orphan blobs, maintenance tasks, last background pass) |
 | Volumes | `GetMeta_StoreVolumes`, `PostGetMeta_StoreVolumeValidate`, `PostGetMeta_StoreVolumeSave`, `PostMeta_StoreVolumeDelete` (only without copies and outside every policy) |
 | Policies | `GetMeta_StorePolicies`, `PostGetMeta_StorePolicySave`, `PostMeta_StorePolicyDelete` (only when no bucket uses it) |
-| Buckets | `GetMeta_StoreBuckets`, `PostGetMeta_StoreBucketSave`, `PostMeta_StoreBucketDelete` (only when it holds no objects, including deleted ones) |
+| Buckets | `GetMeta_StoreBuckets`, `PostGetMeta_StoreBucketSave`, `PostMeta_StoreBucketDelete` (only when it holds no objects, including deleted ones, and is not managed), `PostMeta_StoreBucketRelease` (a managed bucket that is no longer declared) |
 | Objects | `GetMeta_StoreObjects(bucketId, prefix, delimiter, continuation, limit)`, `GetMeta_StoreObject`, `PostGetMeta_StoreObjectUpload(request, content)` (streamed), `GetMeta_StoreObjectDownload(bucketId, key, version)` (streamed), `PostMeta_StoreObjectDelete` |
 | Versions | `GetMeta_StoreObjectVersions`, `PostGetMeta_StoreObjectRestore`, `PostMeta_StoreObjectVersionPurge` |
 | Maintenance | `GetMeta_StoreGcReview(graceHours)`, `PostGetMeta_StoreGcRun(graceHours)`, `PostGetMeta_StoreRetentionRun`, `PostGetMeta_StoreRepairRun`, `GetMeta_StoreTasks` |
 
-All GET actions take simple parameters only. Maintenance runs start global business tasks (keys
+For managed buckets the locks in [What is locked](#what-is-locked) apply. All GET actions take simple parameters
+only. Maintenance runs start global business tasks (keys
 `objectstorage:gc`, `objectstorage:retention`, `objectstorage:repair`), visible in the manager and in the
 Business Task Manager.
 
@@ -209,9 +319,16 @@ the core like the other managers. MAUI has no screen.
   download, delete, **Versions** side sheet (restore, download a version, delete a version permanently),
   **Load more** for long listings. **New bucket**/**Edit** open a side sheet (name, policy, state, note).
   **Open in tab** opens the selected bucket (at the current folder while browsing) in the bucket editor.
+  A managed bucket shows a **MANAGED** chip (hover: owner and description) and, when it is no longer declared,
+  **NOT DECLARED**; its side sheet shows the owner and description read-only above the note, the policy list is
+  locked, **Delete** is disabled and **More › Release managed bucket** releases an undeclared one after
+  confirmation. Its object browser and version sheet keep **Download** and **Versions** and disable upload
+  (also drag-drop), delete, restore and permanent delete, with a line saying the contents are read-only.
+  Policies of managed buckets are not offered for new or other buckets.
 - **Volumes**: volume table with copies, size, missing copies and a live folder check; editor with **Check**.
 - **Policies**: policy table; editor with replicas, retention, quotas (MB), access and the ordered volume list
-  (check to include, arrows to reorder).
+  (check to include, arrows to reorder). A policy of a managed bucket shows a **MANAGED** chip; in its editor
+  **Access** is disabled (hover help explains why) and every other field stays editable.
 - **Maintenance**: status counters, garbage collection (grace period, **Review**, then **Run**), retention
   and repair runs, and the running task list.
 - Home screen card: logical versus physical size and the number of volumes with problems, with its own
@@ -237,12 +354,15 @@ await NavigationEntry!.NavigateTo(EmApp.ObjectStorageBucketNavigationName, Store
 The tab title is `Bucket: <name>` (`New Bucket` until a new bucket is saved), so opening a bucket that is
 already open switches to its tab. Saving settings and deleting versions permanently still need
 `Object Storage Settings Manage` on the server. An unknown bucket name leaves the page empty with a message.
-The editor uses the same view model as the manager (`ObjectStorageManagerVm` in bucket page mode).
+The editor uses the same view model as the manager (`ObjectStorageManagerVm` in bucket page mode). For a
+managed bucket it shows the MANAGED chip, owner and description above the settings, locks the policy and
+makes the objects read-only like the manager.
 
 ## Limits of version 1
 
 Not included: the S3 protocol and presigned URLs, remote volume providers, per-bucket rights for users or
-roles, draining volumes and automatic rebalancing, multiple API instances, encryption at rest, object lock,
+roles (managed buckets lock contents for every administrator alike), draining volumes and automatic
+rebalancing, multiple API instances, encryption at rest, object lock,
 lifecycle rules other than version retention, moving the CDN/registry/NuGet/approval storage into object
 storage, and a MAUI screen. The engine uses SQL Server-specific locking hints; other database providers are
 not supported for object storage.
@@ -259,9 +379,14 @@ the multipart rule, added with the adapter; the SHA-256 is never an ETag) and mu
 ## Maintainer notes
 
 - Unit tests: `tests/Em.Api.Core.Tests/ObjectStorage/` (names, keys, CRC32, hash lock, local volumes,
-  policy validation, retention rule). Integration tests against SQL Server:
-  `tests/Em.Api.Core.IntegrationTests/ObjectStoreTests.cs` (they create the schema from the real SQL scripts
-  and skip without a reachable server). View-model tests: `tests/Em.Ui.Wpf.Core.Tests/ObjectStorageManagerTests.cs`.
+  policy validation, retention rule, managed bucket declarations and their JSON). Integration tests against SQL
+  Server: `tests/Em.Api.Core.IntegrationTests/ObjectStoreTests.cs` and `ManagedBucketTests.cs` (provisioning,
+  adoption, access enforcement, the 409 locks, release; they create the schema from the real SQL scripts and
+  skip without a reachable server). View-model tests: `tests/Em.Ui.Wpf.Core.Tests/ObjectStorageManagerTests.cs`.
+- The test module `Em.Test` declares the managed bucket `emtest-files` (owner `Em Test`) as an example.
+- Live smoke against a local Em.Api (starts the API itself on a local database, cleans its rows afterwards):
+  `dotnet run --project ..\.artefacts\em-system\scripts\managed-bucket-smoke`. Render check of the screens,
+  light and dark: `dotnet run --project ..\.artefacts\em-system\scripts\managed-bucket-render`.
 - Listing uses the binary collation of `cStoreObjectKey` and the indexed computed column
   `cStoreObjectKeyPrefix` (first 400 characters). Listing performance with large buckets has not been
   measured yet.

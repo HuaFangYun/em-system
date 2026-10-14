@@ -38,6 +38,9 @@ namespace Em.Test.Models
       /// <summary>The prefix of test business task keys.</summary>
       const string TaskKeyPrefix = "test.task.";
 
+      /// <summary>The managed object storage bucket the test module declares.</summary>
+      const string FilesBucket = "emtest-files";
+
       #region Tables
 
       #region TestItem
